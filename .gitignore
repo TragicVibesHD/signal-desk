@@ -1,0 +1,11 @@
+data/
+*.log
+.env
+.env.*
+!.env.example
+node_modules/
+artifacts/
+.DS_Store
+Thumbs.db
+*.pem
+*.key
