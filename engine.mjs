@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import {bracketPrices} from './protection.mjs';
 export const STRATEGIES = {
   breakout: {name:'Opening range', description:'Buy a close above the first 30-minute high; exit below VWAP or after 60 minutes.'},
   reversion: {name:'VWAP reversion', description:'Buy a 0.35% discount to session VWAP after a rising close; exit at VWAP or after 60 minutes.'},
@@ -69,23 +70,24 @@ export function signal(h,strategy,context={}){if(h.length<2)return null;const b=
  return null;
 }
 export function buyRisk(s,o,b,now=Date.now()){
- const a=account(s),c=s.settings;
+ const a=account(s),c=s.settings,equity=s.allocationMode?Math.min(s.startingCash,a.equity):a.equity,lossBase=s.allocationMode?s.startingCash:s.dayStart;
  if(s.halted)return 'Emergency stop is active';if(now-s.lastDataAt>30000)return 'Market data is stale';
  if(!b||b.timestamp!==s.marketTime)return 'No current bar for this symbol';if(b.minute>=(b.sessionCloseMinute??390)-30)return 'New entries close 30 minutes before the session ends';
- if(a.dailyPnl<=-s.dayStart*c.dailyLossPct/100)return 'Daily loss limit reached';if(s.positions[o.symbol])return 'Position already exists';
+ if(a.dailyPnl<=-lossBase*c.dailyLossPct/100)return 'Daily loss limit reached';if(s.positions[o.symbol])return 'Position already exists';
  if(Object.keys(s.positions).length>=c.maxPositions)return 'Maximum positions reached';
  if(c.maxSpreadBps&&c.spreadBps>c.maxSpreadBps)return 'Modeled spread is too wide for scalping';
  if(Date.parse(b.timestamp)<(s.cooldowns?.[o.symbol]||0))return 'Exit cooldown is active';
  if(c.maxEntriesDay&&s.orders.filter(o=>o.side==='buy'&&(o.day||stamp(o.time).day)===b.day).length>=c.maxEntriesDay)return 'Daily entry count limit';
  const price=b.open*(1+(c.spreadBps/2+c.slippageBps)/10000);const cost=o.qty*(price+c.commission);
  if(!Number.isInteger(o.qty)||o.qty<1)return 'No whole shares fit risk limits';if(cost>s.cash)return 'Insufficient cash';
- if(o.qty*price>a.equity*c.positionPct/100+0.01)return 'Position size limit';if(a.exposure+o.qty*price>a.equity*c.grossPct/100)return 'Gross exposure limit';
- if(o.qty*price*c.stopPct/100>a.equity*c.riskPct/100)return 'Per-trade risk budget';if(o.qty>Math.floor(b.volume*c.participationPct/100))return 'Order exceeds bar participation limit';return null;
+ if(o.qty*price>equity*c.positionPct/100+0.01)return 'Position size limit';if(a.exposure+o.qty*price>equity*c.grossPct/100)return 'Gross exposure limit';
+ if(o.qty*price*c.stopPct/100>equity*c.riskPct/100)return 'Per-trade risk budget';if(o.qty>Math.floor(fillVolume(s,b)*c.participationPct/100))return 'Order exceeds bar participation limit';return null;
 }
 export function approve(s,id,now=Date.now()) {const o=s.queue.find(o=>o.id===id);if(!o||o.status!=='pending')throw Error('Suggestion is no longer pending');if(now>o.expiresAt||s.cursor>o.expiresCursor){o.status='expired';throw Error('Suggestion expired');}if(s.halted)throw Error('Emergency stop is active');o.status='approved';log(s,`Approved ${o.symbol}; revalidation and next-bar execution pending.`);}
 export function stop(s){s.halted=true;s.running=false;for(const o of s.queue)if(['pending','approved'].includes(o.status))o.status='cancelled';log(s,'Emergency stop: new entries blocked, suggestions cancelled. Positions remain open; use Flatten & advance for exit attempts.');}
-function sell(s,symbol,b,reason){const p=s.positions[symbol],c=s.settings;const qty=Math.min(p.qty,Math.floor(b.volume*c.participationPct/100));if(qty<1){log(s,`${symbol}: exit deferred; no simulated liquidity.`);return;}
- const price=b.open*(1-(c.spreadBps/2+c.slippageBps)/10000),fee=qty*c.commission,pnl=(price-p.avg)*qty-fee-p.entryFee*qty/p.qty;
+function fillVolume(s,b){const previous=s.history[b.symbol]?.at(-1);return s.settings.priorBarLiquidity?(previous?.day===b.day?previous.volume:0):b.volume;}
+function sell(s,symbol,b,reason,reference=b.open){const p=s.positions[symbol],c=s.settings;const qty=Math.min(p.qty,Math.floor(fillVolume(s,b)*c.participationPct/100));if(qty<1){log(s,`${symbol}: exit deferred; no simulated liquidity.`);return;}
+ const price=reference*(1-(c.spreadBps/2+c.slippageBps)/10000),fee=qty*c.commission,pnl=(price-p.avg)*qty-fee-p.entryFee*qty/p.qty;
  s.cash+=qty*price-fee;const order={id:randomUUID(),symbol,side:'sell',qty,price:round(price),fee:round(fee),time:b.timestamp,status:'filled',reason,strategy:p.strategy};s.orders.unshift(order);s.trades.unshift({...order,pnl:round(pnl),entry:p.avg});p.entryFee*=1-qty/p.qty;p.qty-=qty;if(!p.qty){delete s.positions[symbol];(s.cooldowns??={})[symbol]=Date.parse(b.timestamp)+(c.cooldownMinutes??10)*60000;}log(s,`${symbol}: sold ${qty} shares · ${reason}`);
 }
 export function tick(s,data,now=Date.now()){
@@ -103,8 +105,18 @@ export function tick(s,data,now=Date.now()){
  if(error){o.status='rejected';o.reason=error;log(s,`${o.symbol}: ${error}`);continue;}
  const c=s.settings,price=b.open*(1+(c.spreadBps/2+c.slippageBps)/10000),fee=o.qty*c.commission;s.cash-=o.qty*price+fee;s.positions[o.symbol]={qty:o.qty,avg:price,entryFee:fee,strategy:o.strategy,time:b.timestamp,day:b.day};o.status='filled';s.orders.unshift({...o,side:'buy',price:round(price),fee:round(fee),time:b.timestamp,day:b.day});log(s,`${o.symbol}: bought ${o.qty} shares · ${STRATEGIES[o.strategy].name}`);
  }
+ if(s.settings.intrabarProtection)for(const [symbol,p]of Object.entries(s.positions)){
+  const b=f.bars.find(b=>b.symbol===symbol);if(!b)continue;
+  if(s.orders.some(o=>o.symbol===symbol&&o.side==='sell'&&o.time===b.timestamp))continue;
+  const {stop:stopPrice,target}=bracketPrices(p.avg,s.settings);
+  // OHLC cannot reveal which threshold came first. Charge the stop when both were touched.
+  if(b.open<=stopPrice)sell(s,symbol,b,'Bracket gap stop',b.open);
+  else if(b.open>=target)sell(s,symbol,b,'Bracket gap target',target);
+  else if(b.low<=stopPrice)sell(s,symbol,b,'Bracket stop',stopPrice);
+  else if(b.high>=target)sell(s,symbol,b,'Bracket target',target);
+ }
  for(const b of f.bars){s.quotes[b.symbol]=b;(s.history[b.symbol]??=[]).push(b);}
- const a=account(s);if(a.dailyPnl<=-s.dayStart*s.settings.dailyLossPct/100&&!s.halted){stop(s);s.flatten=true;log(s,'Daily loss guard triggered; liquidation will be attempted on subsequent bars.');}
+ const a=account(s);if(a.dailyPnl<=-(s.allocationMode?s.startingCash:s.dayStart)*s.settings.dailyLossPct/100&&!s.halted){stop(s);s.flatten=true;log(s,'Daily loss guard triggered; liquidation will be attempted on subsequent bars.');}
  if(!s.halted&&!s.flatten&&!flattenRequested)for(const b of f.bars){if(s.positions[b.symbol]||Date.parse(b.timestamp)<(s.cooldowns?.[b.symbol]||0)||s.queue.some(o=>o.symbol===b.symbol&&['pending','approved'].includes(o.status)))continue;
  for(const strategy of s.strategies){const reason=signal(s.history[b.symbol],strategy,{openingVolumes:s.openingHistory?.[b.symbol]});if(!reason)continue;const c=s.settings,eq=s.allocationMode?Math.min(s.startingCash,a.equity):a.equity,qty=Math.floor(Math.min(eq*c.positionPct/100/(b.close*1.006),eq*c.riskPct/100/(b.close*c.stopPct/100),s.cash/(b.close*1.006+c.commission)));
  const priority=signalPriority(s.history[b.symbol],strategy,{openingVolumes:s.openingHistory?.[b.symbol]});

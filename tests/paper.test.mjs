@@ -58,7 +58,7 @@ test('paper cooldown is enforced again at submission and expires after ten minut
 });
 test('experimental profile is frozen and cannot select arbitrary broker strategies',()=>{
  const s=fixture(),plan=makeSession({date:'2026-09-25',capital:2000,profile:'activity'},s,now);
- assert.deepEqual(plan.strategies,['activity']);assert.equal(plan.settings.dailyLossPct,2);assert.equal(plan.engineVersion,3);
+ assert.deepEqual(plan.strategies,['activity']);assert.equal(plan.settings.dailyLossPct,2);assert.equal(plan.engineVersion,4);assert.equal(plan.settings.brokerProtection,true);
  assert.throws(()=>makeSession({date:'2026-09-25',capital:2000,profile:'leverage'},s,now),/profile/);
 });
 test('active paper breakout warms up from preceding sessions and ranks stocks by opening activity',async()=>{
@@ -141,6 +141,8 @@ test('provider authentication failures do not expose secret values',async()=>{
 
 function allocated(s=fixture()){
  s.session=makeSession({date:'2026-09-25',capital:2000},s,now);
+ // Preserve coverage of saved pre-bracket sessions; bracket lifecycles have separate tests.
+ s.session.settings.brokerProtection=false;
  Object.assign(s.session,{status:'running',openAt:'2026-09-25T13:30:00Z',closeAt:'2026-09-25T20:00:00Z'});return s;
 }
 test('$2k allocation caps entries independently of the $100k broker balance',()=>{

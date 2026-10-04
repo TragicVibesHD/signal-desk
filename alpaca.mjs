@@ -54,6 +54,7 @@ export class Alpaca {
   positions() { return this.request(PAPER_URL, '/v2/positions'); }
   orders() { return this.request(PAPER_URL, '/v2/orders?status=all&limit=500&nested=true&direction=desc'); }
   order(id) { return this.request(PAPER_URL, '/v2/orders:by_client_order_id?client_order_id=' + encodeURIComponent(id)); }
+  orderById(id) { return this.request(PAPER_URL, '/v2/orders/' + encodeURIComponent(id) + '?nested=true'); }
   cancel(id) { return this.request(PAPER_URL, '/v2/orders/' + encodeURIComponent(id), {method: 'DELETE'}); }
   submit(order) { return this.request(PAPER_URL, '/v2/orders', {method:'POST', body:order}); }
   asset(symbol) { if (!UNIVERSE.includes(symbol)) throw Error('Unsupported stock'); return this.request(PAPER_URL, '/v2/assets/' + symbol); }

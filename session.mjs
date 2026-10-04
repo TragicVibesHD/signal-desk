@@ -13,7 +13,7 @@ export function makeSession({date,capital,profile='baseline'},s,now=Date.now()) 
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date)throw Error('Choose a valid session date.');
   if(date<stamp(new Date(now).toISOString()).day||Date.parse(date)>now+31*86400000)throw Error('Choose today or a date within the next 31 days.');
   if(s.positions.length||s.orders.some(o=>!terminal.has(o.status))||unresolved(s)||s.ownershipConflicts?.length)throw Error('Resolve all broker positions and open or uncertain orders before creating a session.');
-  return {id:randomUUID(),date,capital,profile,engineVersion:3,status:'needs_connection',autoAfterConnect:true,intentStart:s.intents.length,createdAt:new Date(now).toISOString(),settings:{...PROFILES[profile].settings},strategies:[...PROFILES[profile].strategies],curve:[],peak:capital,maxDrawdown:0};
+  return {id:randomUUID(),date,capital,profile,engineVersion:4,status:'needs_connection',autoAfterConnect:true,intentStart:s.intents.length,createdAt:new Date(now).toISOString(),settings:{...PROFILES[profile].settings,brokerProtection:true},strategies:[...PROFILES[profile].strategies],curve:[],peak:capital,maxDrawdown:0};
 }
 
 // Calendar times are exchange-local; derive the offset for that date (including DST).

@@ -4,6 +4,8 @@ Updated October 3, 2026; checked locally with Node 24.14.0.
 
 ## Automated checks
 
+Current version 4 suite: **81 tests pass**. Historical entries below record the checks run for earlier versions.
+
 `npm test` runs 62 tests without downloading dependencies:
 
 - Next-bar entry timing and spread, slippage, commission, and cash accounting.
@@ -67,3 +69,9 @@ The one-click real-data comparison downloads the allowed historical window and e
 All 62 tests pass. Added checks verify $1,400 entries against a $2,000 allocation rather than broker buying power, rejection above $1,500, unreserved cash, one-position limit, wide-spread and low-volume rejection, eight-entry cap, five-minute cooldown, $40 session-loss protection, stop/target/15-minute exit submissions, consecutive-bar signal requirements, volume confirmation, and research using the actual scalp profile. These are fixture and synthetic checks; no authenticated scalp performance is established.
 
 Browser verification shows all six comparison rows with their actual position / stop / target settings, rejects synthetic performance as evidence, and exposes the scalp profile in dated paper setup. The completed September 30 result remains unchanged. No browser warnings or errors or document overflow were observed. The updated server runs under the VS Code debugger; the current broker connection is unconfigured, entries are stopped, and no scalp session has been armed. No broker orders were placed during verification.
+
+## Broker protection and standards — October 3, 2026
+
+All 81 tests pass. New coverage verifies durable bracket requests and quote capture; nested leg adoption/deduplication; target and resized-stop fills; cash/P&L/ownership reconciliation; cancellation waiting; fill-versus-cancel races; restart with a pending exit; no cancellation/resubmission churn for a pending market sell; partially filled entries without active protection; preserved protection after stopping entries; accepted brackets with lost responses; external order isolation; double-fill attention; missing-parent recovery; completed-trade metrics after partial exits and fees; data gaps/off-grid/calendar omissions; whole-share passive benchmark costs; conservative stop-first OHLC modeling; adverse gaps; prior-bar liquidity without future execution volume; and fixed allocation/daily loss caps after accumulated gains. A pending exit blocks fresh buys until reconciliation. The HTTP suite verifies the new UI module is served.
+
+Browser inspection verifies operational checks, preserved $1.20 completed paper results, legacy slippage shown as unavailable, all six research rows with completed-trade/concentration metrics, data coverage and cash/basket benchmarks, and the sourced established-system comparison. Synthetic prices still fail the evidence screen. The final browser inspection records no warnings or errors and no document overflow. The updated server remains in the VS Code debugger. Credentials are unconfigured, entries are stopped, and no external paper orders were placed during this upgrade. Authenticated bracket success and real-data profitability are not claimed.

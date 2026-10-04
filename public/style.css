@@ -4,3 +4,4 @@
 #paper-connect .form-grid { grid-template-columns: minmax(0, 1fr); }
 
 @media(min-width:1101px){.strategy-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+.comparison-table{table-layout:fixed;white-space:normal;line-height:1.55}.comparison-table td,.comparison-table th{vertical-align:top;padding:13px 14px;overflow-wrap:anywhere}.comparison-table th:first-child{width:25%}

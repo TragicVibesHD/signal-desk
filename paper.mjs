@@ -2,6 +2,8 @@ import {randomUUID, createHash} from 'node:crypto';
 import {initial, signal, signalPriority, indicators, stamp} from './engine.mjs';
 import {UNIVERSE} from './alpaca.mjs';
 import {makeSession,exchangeTime,sessionTotals,sessionEntryCheck,riskCapital,unresolved} from './session.mjs';
+import {bracketPrices,flattenOrders,adoptLegs} from './protection.mjs';
+import {paperExecution} from './metrics.mjs';
 
 const terminal = new Set(['filled','canceled','expired','rejected','replaced']);
 const finite = (value, name) => { const n = Number(value); if (!Number.isFinite(n)) throw Error(`Invalid provider ${name}`); return n; };
@@ -16,6 +18,7 @@ export function freshQuote(q, now) {
 }
 export function entryRisk(s, idea, settings, now=Date.now()) {
   if (!s.connected || s.halted || !s.running) throw Error('Paper entries are stopped.');
+  if(Object.keys(s.exitRequests||{}).length)throw Error('A position exit is pending; new entries wait for reconciliation.');
   sessionEntryCheck(s,now);
   if (!s.lastSync || now-Date.parse(s.lastSync)>30000) throw Error('Account reconciliation is stale.');
   if (!s.clock?.is_open || now-Date.parse(s.clock.timestamp)>30000 || Date.parse(s.clock.timestamp)-now>5000) throw Error('Market is closed or clock is stale.');
@@ -44,6 +47,7 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<(settings.cooldownMinutes??10)*60000)throw Error(`${settings.cooldownMinutes??10}-minute cooldown after the last exit.`);
   const vwap=indicators(s.history[idea.symbol]||[]).vwap;
   if(['breakout','activity','scalp'].includes(idea.strategy)&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Breakout entry is already below its VWAP exit threshold.');
+  if(idea.strategy==='scalp'&&Number.isFinite(vwap)&&ask>vwap*1.005)throw Error('Scalp quote is more than 0.5% above VWAP; do not chase the move.');
   if (Math.abs(ask/idea.reference-1)>.005) throw Error('Price moved more than 0.5% from the suggestion.');
   const price=Math.ceil(ask*(1+(settings.entryBufferBps??10)/10000)*100)/100;
   const reserved=buys.reduce((n,o)=>n+Math.max(0,finite(o.qty,'order quantity')-finite(o.filled_qty,'filled quantity'))*finite(o.limit_price,'limit price'),0);
@@ -53,6 +57,7 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   if (notional>Math.min(cash,buyingPower)-reserved) throw Error('Insufficient unreserved cash or buying power.');
   if (notional>equity*settings.positionPct/100 || exposure+reserved+notional>equity*settings.grossPct/100) throw Error('Position or gross exposure limit reached.');
   if (notional*settings.stopPct/100>equity*settings.riskPct/100) throw Error('Per-entry risk budget exceeded.');
+  if(settings.brokerProtection&&qty*(price-bracketPrices(price,settings).stop)>equity*settings.riskPct/100)throw Error('Rounded broker stop exceeds the per-entry risk budget.');
   const last=s.history[idea.symbol]?.at(-1);
   if (!last || now-Date.parse(last.timestamp)-300000>90000 || Date.parse(last.timestamp)+300000>now) throw Error('Completed five-minute bar is stale or missing.');
   if (qty>Math.floor(last.volume*settings.participationPct/100)) throw Error('Order exceeds the last completed IEX bar volume limit.');
@@ -68,7 +73,7 @@ export class PaperService {
   }
   persist(){this.save(this.s);}
   log(message){this.s.logs.unshift({time:new Date(this.now()).toISOString(),message});this.s.logs=this.s.logs.slice(0,150);}
-  public(){const s=this.s;return {...s,performance:sessionTotals(s),assets:undefined,history:undefined,seen:undefined,accountId:undefined,account:s.account?{equity:s.account.equity,cash:s.account.cash,buying_power:s.account.buying_power,last_equity:s.account.last_equity,status:s.account.status}:null,configured:!!this.client,feed:'iex',endpoint:'Alpaca paper only',monitoring:!!this.client,uncertain:s.intents.filter(i=>['submitting','unknown'].includes(i.status)).length};}
+  public(){const s=this.s;return {...s,protection:this.protection(),execution:paperExecution(s.intents.slice(s.session?.intentStart??0)),performance:sessionTotals(s),assets:undefined,history:undefined,seen:undefined,accountId:undefined,account:s.account?{equity:s.account.equity,cash:s.account.cash,buying_power:s.account.buying_power,last_equity:s.account.last_equity,status:s.account.status}:null,configured:!!this.client,feed:'iex',endpoint:'Alpaca paper only',monitoring:!!this.client,uncertain:s.intents.filter(i=>['submitting','unknown'].includes(i.status)).length};}
   async exclusive(fn){if(this.busy)throw Error('Paper connection is busy; try again shortly.');this.busy=true;try{return await fn();}finally{this.busy=false;this.persist();}}
   async connect(client){return this.exclusive(async()=>{
     const account=await client.account();
@@ -111,18 +116,28 @@ export class PaperService {
   async sync(){
     if(!this.client)throw Error('Connect paper credentials first.');
     const results=await Promise.all([this.client.account(),this.client.positions(),this.client.orders(),this.client.clock(),this.client.quotes(UNIVERSE)]);
-    const [a,positions,orders,clock,quotes]=results;
+    const [a,positions,roots,clock,quotes]=results;
     if(a.id!==this.s.accountId)throw Error('Paper account identity changed.');
-    if(!Array.isArray(positions)||!Array.isArray(orders)||!clock.timestamp)throw Error('Invalid broker response.');
+    if(!Array.isArray(positions)||!Array.isArray(roots)||!clock.timestamp)throw Error('Invalid broker response.');
     finite(a.equity,'equity');finite(a.cash,'cash');
+    // Filled parents can disappear from the recent list while their protective legs remain open.
+    for(const parent of this.s.intents.filter(i=>i.side==='buy'&&i.order_class==='bracket')){
+      const children=this.s.intents.filter(i=>i.parentId===parent.client_order_id);
+      const needed=active(parent)||this.owned(parent.symbol)>0||children.some(active);
+      if(needed&&!roots.find(o=>o.client_order_id===parent.client_order_id)?.legs?.length&&parent.brokerId){
+        const remote=await this.client.orderById(parent.brokerId);roots.push(remote);
+      }
+    }
+    adoptLegs(this.s.intents,roots);
+    const orders=flattenOrders(roots);
     // Supplement the bounded recent-order list with each unresolved durable intent.
     for(const intent of this.s.intents.filter(i=>!terminal.has(i.status))){
       let remote=orders.find(o=>o.client_order_id===intent.client_order_id);
-      if(!remote){try{remote=await this.client.order(intent.client_order_id);orders.push(remote);}catch(e){if(e.status!==404)throw e;intent.status='unknown';}}
-      if(remote)Object.assign(intent,{status:remote.status,brokerId:remote.id,filled_qty:remote.filled_qty,filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});
+      if(!remote){try{remote=await this.client.order(intent.client_order_id);adoptLegs(this.s.intents,[remote]);orders.push(...flattenOrders([remote]));}catch(e){if(e.status!==404)throw e;intent.status='unknown';}}
+      if(remote)Object.assign(intent,{status:remote.status,brokerId:remote.id,qty:remote.qty??intent.qty,filled_qty:remote.filled_qty,filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});
     }
-    for(const intent of this.s.intents){const remote=orders.find(o=>o.client_order_id===intent.client_order_id);if(remote)Object.assign(intent,{status:remote.status,brokerId:remote.id,filled_qty:remote.filled_qty,filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});}
-    this.s.ownershipConflicts=UNIVERSE.filter(symbol=>{const qty=this.owned(symbol);return qty>0&&Math.abs(qty-Number(positions.find(p=>p.symbol===symbol)?.qty||0))>.000001;});
+    for(const intent of this.s.intents){const remote=orders.find(o=>o.client_order_id===intent.client_order_id);if(remote)Object.assign(intent,{status:remote.status,brokerId:remote.id,qty:remote.qty??intent.qty,filled_qty:remote.filled_qty,filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});}
+    this.s.ownershipConflicts=UNIVERSE.filter(symbol=>{const qty=this.s.intents.filter(i=>i.symbol===symbol).reduce((n,i)=>n+(i.side==='buy'?1:-1)*Number(i.filled_qty||0),0);return qty<-.000001||qty>0&&Math.abs(qty-Number(positions.find(p=>p.symbol===symbol)?.qty||0))>.000001;});
     Object.assign(this.s,{account:a,positions,orders,clock,quotes:quotes.quotes||{},connected:true,lastSync:new Date(this.now()).toISOString(),lastError:null});
     const day=stamp(clock.timestamp).day;
     if(day!==this.s.day){this.s.day=day;this.s.dayStart=finite(a.last_equity||a.equity,'previous close equity');this.s.history={};this.s.seen={};for(const idea of this.s.suggestions)if(pending(idea))idea.status='expired';}
@@ -137,6 +152,10 @@ export class PaperService {
   }
   owned(symbol){return Math.max(0,this.s.intents.filter(i=>i.symbol===symbol).reduce((n,i)=>n+(i.side==='buy'?1:-1)*Number(i.filled_qty||0),0));}
   owner(symbol){return [...this.s.intents].reverse().find(i=>i.symbol===symbol&&i.side==='buy'&&Number(i.filled_qty)>0);}
+  protection(){
+    const unprotected=this.s.positions.filter(p=>this.owned(p.symbol)>0&&!this.s.orders.some(o=>o.symbol===p.symbol&&o.side==='sell'&&['stop','stop_limit'].includes(o.type)&&active(o)&&!['held','pending_cancel'].includes(o.status)&&Number(o.qty)-Number(o.filled_qty||0)>=this.owned(p.symbol)&&this.s.intents.some(i=>i.protective&&i.brokerId===o.id))).map(p=>p.symbol);
+    return {enabled:!!this.settings().brokerProtection,unprotected,pendingExits:Object.keys(this.s.exitRequests||{})};
+  }
   async refreshHistory(){
     const day=this.s.day;
     if(!this.s.clock.is_open)return;
@@ -153,7 +172,7 @@ export class PaperService {
   }
   halt(reason='Paper entries stopped. Protective exit monitoring continues while connected.'){
     this.generation++;this.s.running=false;this.s.halted=true;
-    if(this.s.session){this.s.session.autoAfterConnect=false;if(!['complete','expired','closing'].includes(this.s.session.status))this.s.session.status='stopped';}
+    if(this.s.session){this.s.session.autoAfterConnect=false;if(!['complete','expired','closing','attention'].includes(this.s.session.status))this.s.session.status='stopped';}
     for(const idea of this.s.suggestions)if(pending(idea))idea.status='cancelled';this.log(reason);this.persist();
   }
   async cancelEntries(){
@@ -179,6 +198,7 @@ export class PaperService {
     if(side==='buy'){
       const checked=entryRisk(this.s,idea,this.settings(),this.now());
       order={symbol:idea.symbol,qty:String(checked.qty),side,type:'limit',limit_price:checked.price.toFixed(2),time_in_force:'day',extended_hours:false,client_order_id:id};
+      if(this.settings().brokerProtection){const prices=bracketPrices(checked.price,this.settings());Object.assign(order,{order_class:'bracket',time_in_force:'gtc',take_profit:{limit_price:prices.target.toFixed(2)},stop_loss:{stop_price:prices.stop.toFixed(2)}});}
     }else{
       if(!this.s.clock.is_open || this.now()>=Date.parse(this.s.clock.next_close) || this.now()-Date.parse(this.s.clock.timestamp)>30000)throw Error('Market is closed or clock is stale; exit deferred.');
       const current=this.s.positions.find(p=>p.symbol===idea.symbol);
@@ -188,8 +208,9 @@ export class PaperService {
       order={symbol:idea.symbol,qty:String(qty),side,type:'market',time_in_force:'day',extended_hours:false,client_order_id:id};
     }
     const intent={...order,status:'submitting',createdAt:new Date(this.now()).toISOString(),reason,strategy:idea.strategy||'manual',filled_qty:'0',signalId:idea.id};
+    if(side==='buy'){const q=this.s.quotes[idea.symbol];Object.assign(intent,{quoteAsk:Number(q.ap),quoteBid:Number(q.bp),quoteTime:q.t,signalBar:idea.barTime});}
     this.s.intents.push(intent);idea.status='submitting';this.persist(); // Durable before the HTTP request.
-    try{const remote=await this.client.submit(order);Object.assign(intent,{status:remote.status,brokerId:remote.id,filled_qty:remote.filled_qty||'0',filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});idea.status='submitted';this.s.orders.unshift(remote);this.log(`${side.toUpperCase()} ${order.qty} ${order.symbol} submitted to paper broker; ${remote.status}.`);}
+    try{const remote=await this.client.submit(order);Object.assign(intent,{status:remote.status,brokerId:remote.id,filled_qty:remote.filled_qty||'0',filled_avg_price:remote.filled_avg_price,filled_at:remote.filled_at});adoptLegs(this.s.intents,[remote]);idea.status='submitted';this.s.orders.unshift(...flattenOrders([remote]));this.log(`${side.toUpperCase()} ${order.qty} ${order.symbol} submitted to paper broker; ${remote.status}${order.order_class==='bracket'?' with broker stop and target':''}.`);}
     catch(e){intent.status=[400,401,403,422].includes(e.status)?'rejected':'unknown';idea.status=intent.status;this.log(`${order.symbol}: ${intent.status==='unknown'?'submission outcome uncertain; new entries blocked':'submission rejected'}.`);throw e;}
     finally{this.persist();}
   }
@@ -201,6 +222,20 @@ export class PaperService {
   });}
   decline(id){const idea=this.s.suggestions.find(i=>i.id===id);if(!idea||idea.status!=='pending')throw Error('Suggestion is no longer pending.');idea.status='declined';this.persist();}
   async flatten(){this.halt('Flatten requested. Cancelling app entry orders, then attempting to close app-owned shares.');this.s.flatten=true;this.persist();return this.exclusive(async()=>{await this.cancelEntries();await this.exits();});}
+  async closePosition(symbol,reason,strategy){
+    const s=this.s;
+    (s.exitRequests??={})[symbol]={reason,strategy};this.persist();
+    const held=s.orders.filter(o=>o.symbol===symbol&&active(o)&&s.intents.some(i=>i.client_order_id===o.client_order_id));
+    if(held.some(o=>o.side==='sell'&&!s.intents.find(i=>i.client_order_id===o.client_order_id)?.protective))return; // An earlier market exit still owns these shares.
+    if(held.length){
+      for(const o of held){try{await this.client.cancel(o.id);}catch(e){if(e.status!==422)throw e;}}
+      // Cancellation can race with a fill. Broker acknowledgement alone does not free shares.
+      await this.sync();
+    }
+    const qty=Math.floor(Math.min(this.owned(symbol),Number(s.positions.find(p=>p.symbol===symbol)?.qty||0)));
+    if(qty<1){delete s.exitRequests[symbol];this.persist();return;}
+    await this.submit({symbol,strategy},'sell',reason,qty);
+  }
   async exits(){
     const s=this.s,c=this.settings(),now=this.now();if(!s.clock?.is_open)return;
     for(const position of s.positions){const qty=Math.min(this.owned(position.symbol),Number(position.qty));if(qty<1)continue;
@@ -209,9 +244,10 @@ export class PaperService {
       const held=(now-Date.parse(owner?.filled_at||owner?.createdAt))/60000;
       let price;try{price=freshQuote(s.quotes[position.symbol],now).bid;}catch{};
       const avg=Number(position.avg_entry_price);
-      const reason=s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=(c.maxHoldMinutes??60)?`${c.maxHoldMinutes??60}-minute time exit`:price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||['breakout','activity','scalp'].includes(owner?.strategy)&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null;
-      if(reason){try{await this.submit({symbol:position.symbol,strategy:owner?.strategy},'sell',reason,Math.floor(qty));}catch(e){this.log(`${position.symbol}: ${e.message}`);}}
+      const reason=s.exitRequests?.[position.symbol]?.reason|| (s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=(c.maxHoldMinutes??60)?`${c.maxHoldMinutes??60}-minute time exit`:price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||['breakout','activity','scalp'].includes(owner?.strategy)&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null);
+      if(reason){try{await this.closePosition(position.symbol,reason,owner?.strategy);}catch(e){this.log(`${position.symbol}: ${e.message}`);}}
     }
+    for(const symbol of Object.keys(s.exitRequests||{}))if(this.owned(symbol)<1)delete s.exitRequests[symbol];
     if(!s.positions.some(p=>this.owned(p.symbol)>0)&&!s.orders.some(o=>active(o)&&s.intents.some(i=>i.client_order_id===o.client_order_id)))s.flatten=false;
   }
   async poll(){if(!this.client||this.busy)return;return this.exclusive(async()=>{
@@ -222,7 +258,7 @@ export class PaperService {
         if(s.running){plan.status='closing';this.halt('Dated session closing: entries stopped; app positions scheduled for liquidation.');}
         if(s.positions.some(p=>this.owned(p.symbol)>0)||unresolved(s))s.flatten=true;
         if(now>=Date.parse(plan.closeAt)){
-          const remaining=s.positions.some(p=>this.owned(p.symbol)>0)||unresolved(s)||s.ownershipConflicts?.length;
+          const remaining=s.positions.some(p=>this.owned(p.symbol)>0||Number(p.qty)<0)||unresolved(s)||s.ownershipConflicts?.length||sessionTotals(s)?.valid===false;
           plan.status=remaining?'attention':'complete';
           if(!remaining)s.flatten=false;
           if(!remaining&&!plan.completedAt){plan.completedAt=new Date(now).toISOString();this.log('Session complete. All app positions and orders are resolved; performance saved.');}
@@ -233,8 +269,9 @@ export class PaperService {
       for(const o of s.orders.filter(o=>active(o)&&o.side==='buy')){const i=s.intents.find(i=>i.client_order_id===o.client_order_id);if(i&&(s.halted||now-Date.parse(i.createdAt)>90000||Date.parse(s.clock.next_close)-now<=30*60000)){try{await this.client.cancel(o.id);}catch(e){if(e.status!==422)throw e;}}}
       let capital;try{capital=riskCapital(s);}catch(e){await this.exits();throw e;}
       if(capital.pnl<=-capital.baseline*c.dailyLossPct/100){if(!s.halted)this.halt('Daily loss limit reached; new entries stopped and flatten scheduled.');s.flatten=true;}
+      if(c.brokerProtection&&this.protection().unprotected.some(symbol=>!s.exitRequests?.[symbol])){this.halt('Broker stop is missing or not active; entries stopped and app positions scheduled for closure.');s.flatten=true;}
       await this.exits(); // Independent of entry mode, and does not depend on history download success.
-      if(!s.clock.is_open||!s.running||s.halted||s.flatten)return;
+      if(!s.clock.is_open||!s.running||s.halted||s.flatten||Object.keys(s.exitRequests||{}).length)return;
       if(plan){try{sessionEntryCheck(s,now);}catch{return;}}
       if(!this.historyFetchedAt||now-this.historyFetchedAt>=30000){await this.refreshHistory();this.historyFetchedAt=now;}
       if(plan)plan.scan={time:new Date(now).toISOString(),results:[]};

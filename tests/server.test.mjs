@@ -19,6 +19,7 @@ test('HTTP workflow, origin protection, persistence and safe restart',async()=>{
  assert.equal((await post('paper/start',{mode:'auto'})).status,400);assert.equal((await fetch(base+'/api/paper/export')).status,200);
  const sessionDate=new Date(Date.now()+86400000).toISOString().slice(0,10);
  assert.equal((await fetch(base+'/session-ui.js')).status,200);
+ assert.equal((await fetch(base+'/standards-ui.js')).status,200);
  assert.equal((await post('paper/session',{date:sessionDate,capital:-1})).status,400);
  assert.equal((await post('paper/session',{date:sessionDate,capital:2000})).status,200);
  s=await get();assert.equal(s.paper.session.capital,2000);assert.equal(s.paper.session.date,sessionDate);assert.equal(s.paper.session.status,'needs_connection');assert.equal(s.paper.running,false);assert.equal(s.paper.performance.equity,2000);

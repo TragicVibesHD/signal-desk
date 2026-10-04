@@ -118,7 +118,7 @@ const server=http.createServer(async(req,res)=>{
  }save();return send(200,{ok:true});
  }
  if(req.method!=='GET')return send(405,{error:'Method not allowed'});
- const assets={'/':'index.html','/app.js':'app.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/research-ui.js':'research-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
+ const assets={'/':'index.html','/app.js':'app.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/research-ui.js':'research-ui.js','/standards-ui.js':'standards-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
  res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/javascript','Cache-Control':'no-cache'});res.end(fs.readFileSync(path.join(root,'public',name)));
  }catch(e){send(400,{error:e.message});}
 });
