@@ -6,6 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {initial,prepare,demoData,tick,account,approve,stop,log,updateSettings,evaluate,STRATEGIES} from './engine.mjs';
 import {Alpaca} from './alpaca.mjs';
 import {PaperService,paperInitial} from './paper.mjs';
+import {downloadEvaluation} from './research.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),dir=process.env.DATA_DIR?path.resolve(process.env.DATA_DIR):path.join(root,'data');fs.mkdirSync(dir,{recursive:true});
 // One engine per account directory, even if another process chooses a different port.
 const lockPath=path.join(dir,'engine.lock'),lockToken=randomUUID();
@@ -63,7 +64,21 @@ const server=http.createServer(async(req,res)=>{
  case '/api/settings':updateSettings(state,b);delete state.research;break;
  case '/api/mode':if(!['approval','auto'].includes(b.mode))throw Error('Invalid mode');state.mode=b.mode;for(const o of state.queue)if(['approved','pending'].includes(o.status))o.status='cancelled';log(state,`Mode changed to ${b.mode}; existing suggestions cancelled.`);break;
  case '/api/strategies':if(!Array.isArray(b.strategies)||!b.strategies.length||b.strategies.some(k=>!STRATEGIES[k]))throw Error('Choose at least one strategy');state.strategies=[...new Set(b.strategies)];for(const o of state.queue)if(['approved','pending'].includes(o.status)&&!state.strategies.includes(o.strategy))o.status='cancelled';break;
- case '/api/research':state.research=evaluate(market,state.settings);break;
+ case '/api/research':{const report=evaluate(market,state.settings,{capital:b.capital??paper.s.session?.capital??2000});state.researchRuns=(state.researchRuns||0)+1;report.runNumber=state.researchRuns;state.research=report;break;}
+ case '/api/research/real':{
+  if(!paper.client)throw Error('Connect Alpaca paper credentials locally first.');
+  if(dataJob.status==='loading')throw Error('A historical download is already in progress.');
+  const capital=Number(b.capital??paper.s.session?.capital??2000);
+  if(!Number.isFinite(capital)||capital<100||capital>1000000)throw Error('Research capital must be between $100 and $1,000,000.');
+  const end=new Date(Date.now()-86400000).toISOString().slice(0,10),start=new Date(Date.parse(end)-119*86400000).toISOString().slice(0,10);
+  const client=paper.client,costs={...state.settings};
+  dataJob={status:'loading',kind:'research',startedAt:new Date().toISOString(),start,end};
+  downloadEvaluation(client,{start,end,costs,capital}).then(({dataset:d,report})=>{
+   fs.writeFileSync(downloadPath+'.tmp',JSON.stringify(d));fs.renameSync(downloadPath+'.tmp',downloadPath);
+   state.researchRuns=(state.researchRuns||0)+1;report.runNumber=state.researchRuns;state.research=report;save();
+   dataJob={status:'ready',kind:'research',label:d.label,bars:d.bars.length,sessions:report.trainDays+report.testDays,source:d.source};
+  }).catch(e=>{dataJob={status:'error',kind:'research',error:e.message};});break;
+ }
  case '/api/import':loadDataset({...b,synthetic:false,source:undefined});break;
  case '/api/paper/connect':{
   const key=b.key||process.env.ALPACA_PAPER_KEY,secret=b.secret||process.env.ALPACA_PAPER_SECRET;
@@ -99,7 +114,7 @@ const server=http.createServer(async(req,res)=>{
  }save();return send(200,{ok:true});
  }
  if(req.method!=='GET')return send(405,{error:'Method not allowed'});
- const assets={'/':'index.html','/app.js':'app.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
+ const assets={'/':'index.html','/app.js':'app.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/research-ui.js':'research-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
  res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/javascript','Cache-Control':'no-cache'});res.end(fs.readFileSync(path.join(root,'public',name)));
  }catch(e){send(400,{error:e.message});}
 });

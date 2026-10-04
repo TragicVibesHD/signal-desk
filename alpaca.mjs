@@ -68,7 +68,7 @@ export class Alpaca {
     if (!calendar.length) throw Error('No exchange sessions in this date range.');
     const raw = {}; let token, page = 0;
     do {
-      const query = new URLSearchParams({symbols:selected.join(','), timeframe:'5Min', start:start+'T00:00:00Z', end:end+'T23:59:59Z', feed:'iex', adjustment, limit:'10000', sort:'asc'});
+      const query = new URLSearchParams({symbols:selected.join(','), timeframe:'5Min', start:start+'T00:00:00Z', end:new Date(Math.min(Date.parse(end+'T23:59:59Z'),now)).toISOString(), feed:'iex', adjustment, limit:'10000', sort:'asc'});
       if (token) query.set('page_token', token);
       const result = await this.request(DATA_URL, '/v2/stocks/bars?' + query);
       for (const [symbol, bars] of Object.entries(result.bars || {})) { if (!selected.includes(symbol)) throw Error('Provider returned an unexpected stock'); (raw[symbol] ??= []).push(...bars); }

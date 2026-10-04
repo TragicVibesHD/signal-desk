@@ -5,13 +5,14 @@ export const sessionSettings=Object.freeze({positionPct:25,grossPct:100,riskPct:
 const terminal=new Set(['filled','canceled','expired','rejected','replaced']);
 export const unresolved=s=>s.intents.some(i=>!terminal.has(i.status));
 
-export function makeSession({date,capital},s,now=Date.now()) {
+export function makeSession({date,capital,profile='baseline'},s,now=Date.now()) {
+  if(!['baseline','activity'].includes(profile))throw Error('Choose a supported paper strategy profile.');
   capital=Number(capital);
   if(!Number.isFinite(capital)||capital<100||capital>1000000)throw Error('Choose simulated capital between $100 and $1,000,000.');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date)throw Error('Choose a valid session date.');
   if(date<stamp(new Date(now).toISOString()).day||Date.parse(date)>now+31*86400000)throw Error('Choose today or a date within the next 31 days.');
   if(s.positions.length||s.orders.some(o=>!terminal.has(o.status))||unresolved(s)||s.ownershipConflicts?.length)throw Error('Resolve all broker positions and open or uncertain orders before creating a session.');
-  return {id:randomUUID(),date,capital,status:'needs_connection',autoAfterConnect:true,intentStart:s.intents.length,createdAt:new Date(now).toISOString(),settings:{...sessionSettings},strategies:['breakout','reversion','momentum'],curve:[],peak:capital,maxDrawdown:0};
+  return {id:randomUUID(),date,capital,profile,engineVersion:2,status:'needs_connection',autoAfterConnect:true,intentStart:s.intents.length,createdAt:new Date(now).toISOString(),settings:{...sessionSettings},strategies:profile==='activity'?['activity']:['breakout','reversion','momentum'],curve:[],peak:capital,maxDrawdown:0};
 }
 
 // Calendar times are exchange-local; derive the offset for that date (including DST).

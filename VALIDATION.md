@@ -1,10 +1,10 @@
 # Validation record
 
-Updated September 29, 2026; checked locally with Node 24.14.0.
+Updated October 3, 2026; checked locally with Node 24.14.0.
 
 ## Automated checks
 
-`npm test` runs 46 tests without downloading dependencies:
+`npm test` runs 56 tests without downloading dependencies:
 
 - Next-bar entry timing and spread, slippage, commission, and cash accounting.
 - Round-trip reconciliation of cash, equity, and realized P&L.
@@ -36,7 +36,7 @@ Verified in the Codex browser at `http://127.0.0.1:4317`:
 
 ## Limits of validation
 
-These checks verify implemented behavior, not profitability or equivalence to a real broker. A previous authenticated paper connection returned account, clock and quote data. No actual broker execution or authenticated historical download has been observed; the current session needs credentials again. Provider tests use clearly identified injected responses. Calendar filtering and partial-fill/order handling are contract-tested. No language model, public deployment, or comprehensive corporate-action handling has been validated. Execution assumptions and missing features are documented in README.md and in the application.
+These checks verify behavior, not profitability or equivalence to a real broker. The persisted September 30 authenticated paper ledger now includes actual paper orders. No authenticated historical download was available during this upgrade; the current server needs credentials again. Provider tests use clearly identified injected responses. Calendar filtering and partial-fill/order handling are contract-tested. No language model, public deployment, or comprehensive corporate-action handling has been validated. Execution assumptions and missing features are documented in README.md and in the application.
 
 
 
@@ -53,3 +53,11 @@ The September 28 automated build did not verify the connected success path again
 All 46 tests pass. Added coverage includes the $2,000 cap against a $100,000 broker account; partial-fill cash reservations; realized/unrealized P&L; a $40 loss trigger; future-day and next-day entry exclusion; DST and early-close calendar times; offline preparation followed by authenticated arming; holiday/expired/insufficient-cash rejection; unresolved-holding protection; stop/arm races; full automatic buy/fill/sell/complete lifecycle; missed-close attention status; and recovery from transient provider failures without retrying uncertain submissions.
 
 The running local API has a saved September 30 allocation of $2,000 with no submitted session orders. The browser shows CONNECT TO ARM and a password-based connection form. This is not an armed, authenticated success claim: credentials must be supplied locally. The Windows background launcher is included.
+
+## Strategy and evaluation upgrade — October 3, 2026
+
+All 56 tests pass. New cases check corrected opening warmup, missing opening bars, below-VWAP entry exclusion, 14-session volume gating, rising opening candles, activity ranking under scarce slots, cooldown enforcement at submission, frozen experimental profiles, preceding-session paper downloads, duplicate prevention, matched $2,000 evaluation, cost stress, synthetic evidence rejection, and development selections unaffected by changed final-test prices and volumes. Historical downloads cap their endpoint at the current time.
+
+The stored September 30 authenticated paper ledger reconciles to $1.20 profit on a $2,000 allocation, five buy / five sell orders, and no remaining positions. This is one observed paper session, before fees. No real historical dataset was saved, and the prior server had stopped with credentials lost from memory. Profit improvement from version 2 is not established. Tests use fixture data, never the broker account.
+
+The one-click real-data comparison downloads the allowed historical window and evaluates it without changing the saved paper session or replay holdings. Its provider pipeline is tested with fixture data; missing credentials are rejected by the HTTP route. Browser inspection verified the five comparison rows, cost-stress column, walk-forward table, failed synthetic evidence checks, experimental profile selector, preserved completed-session results and next-weekday date suggestion. No real orders were sent during verification.

@@ -38,6 +38,10 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   const buys=open.filter(o=>o.side==='buy');
   if (s.positions.length+buys.length>=settings.maxPositions) throw Error('Maximum position count reached.');
   const {ask}=freshQuote(s.quotes[idea.symbol],now);
+  const recentExit=[...s.intents].reverse().find(i=>i.symbol===idea.symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
+  if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<600000)throw Error('Ten-minute cooldown after the last exit.');
+  const vwap=indicators(s.history[idea.symbol]||[]).vwap;
+  if(['breakout','activity'].includes(idea.strategy)&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Breakout entry is already below its VWAP exit threshold.');
   if (Math.abs(ask/idea.reference-1)>.005) throw Error('Price moved more than 0.5% from the suggestion.');
   const price=Math.ceil(ask*1.001*100)/100;
   const reserved=buys.reduce((n,o)=>n+Math.max(0,finite(o.qty,'order quantity')-finite(o.filled_qty,'filled quantity'))*finite(o.limit_price,'limit price'),0);
@@ -136,6 +140,14 @@ export class PaperService {
     if(!this.s.clock.is_open)return;
     const d=await this.client.historical({start:day,end:day,adjustment:'raw',now:this.now(),maxPages:3,requireAll:false});
     this.s.history={};for(const b of d.bars)(this.s.history[b.symbol]??=[]).push(b);
+    if(this.strategies().includes('activity')&&this.volumeDay!==day){
+      const end=new Date(Date.parse(day+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+      const start=new Date(Date.parse(day+'T12:00:00Z')-45*86400000).toISOString().slice(0,10);
+      const previous=await this.client.historical({start,end,adjustment:'split',now:this.now(),requireAll:false});
+      this.openingVolumes={};
+      for(const b of previous.bars)if(stamp(b.timestamp).minute===0){const values=this.openingVolumes[b.symbol]??=[];values.push(b.volume);this.openingVolumes[b.symbol]=values.slice(-14);}
+      this.volumeDay=day;
+    }
   }
   halt(reason='Paper entries stopped. Protective exit monitoring continues while connected.'){
     this.generation++;this.s.running=false;this.s.halted=true;
@@ -195,7 +207,7 @@ export class PaperService {
       const held=(now-Date.parse(owner?.filled_at||owner?.createdAt))/60000;
       let price;try{price=freshQuote(s.quotes[position.symbol],now).bid;}catch{};
       const avg=Number(position.avg_entry_price);
-      const reason=s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=60?'60-minute time exit':price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||owner?.strategy==='breakout'&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null;
+      const reason=s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=60?'60-minute time exit':price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||['breakout','activity'].includes(owner?.strategy)&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null;
       if(reason){try{await this.submit({symbol:position.symbol,strategy:owner?.strategy},'sell',reason,Math.floor(qty));}catch(e){this.log(`${position.symbol}: ${e.message}`);}}
     }
     if(!s.positions.some(p=>this.owned(p.symbol)>0)&&!s.orders.some(o=>active(o)&&s.intents.some(i=>i.client_order_id===o.client_order_id)))s.flatten=false;
@@ -224,13 +236,18 @@ export class PaperService {
       if(plan){try{sessionEntryCheck(s,now);}catch{return;}}
       if(!this.historyFetchedAt||now-this.historyFetchedAt>=30000){await this.refreshHistory();this.historyFetchedAt=now;}
       if(plan)plan.scan={time:new Date(now).toISOString(),results:[]};
-      for(const symbol of UNIVERSE){const h=s.history[symbol]||[],last=h.at(-1),scan={symbol,message:'No qualifying signal on the latest completed bar.'};if(plan)plan.scan.results.push(scan);
+      const relative=symbol=>{const values=this.openingVolumes?.[symbol]||[],opening=s.history[symbol]?.find(b=>b.minute===0);return values.length===14&&opening?opening.volume/(values.reduce((n,v)=>n+v,0)/14||Infinity):0;};
+      const stocks=this.strategies().includes('activity')?[...UNIVERSE].sort((a,b)=>relative(b)-relative(a)||a.localeCompare(b)):UNIVERSE;
+      for(const symbol of stocks){const h=s.history[symbol]||[],last=h.at(-1),scan={symbol,message:'No qualifying signal on the latest completed bar.'};if(plan)plan.scan.results.push(scan);
         if(!last){scan.message='Waiting for completed five-minute IEX bars.';continue;}
         if(s.seen[symbol]===last.timestamp){scan.message='Latest completed bar already evaluated; waiting for a new bar.';continue;}
         s.seen[symbol]=last.timestamp;
+        const recentExit=[...s.intents].reverse().find(i=>i.symbol===symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
+        if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<600000){scan.message='Ten-minute cooldown after the last exit.';continue;}
         if(s.positions.some(p=>p.symbol===symbol)||s.suggestions.some(i=>i.symbol===symbol&&pending(i))){scan.message='Position or pending suggestion already exists.';continue;}
         for(const strategy of this.strategies()){
-          const reason=signal(h,strategy);if(!reason)continue;
+          if(strategy==='activity'&&(this.openingVolumes?.[symbol]?.length||0)<14){scan.message='Active breakout needs opening volume from 14 preceding sessions.';continue;}
+          const reason=signal(h,strategy,{openingVolumes:this.openingVolumes?.[symbol]});if(!reason)continue;
           let ask;try{ask=freshQuote(s.quotes[symbol],now).ask;}catch(e){scan.message=e.message;break;}
           const capital=riskCapital(s),eq=capital.equity,t=sessionTotals(s),budget=Math.min(eq*c.positionPct/100,eq*c.riskPct/c.stopPct,capital.cash,t?.available??Infinity,eq*c.grossPct/100-(t?.exposure||0)-(t?.reserved||0));
           const qty=Math.floor(Math.min(budget/(ask*1.003),last.volume*c.participationPct/100));if(qty<1){scan.message='Available budget or IEX volume is too small for one share.';break;}

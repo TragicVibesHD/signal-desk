@@ -37,6 +37,7 @@ test('historical adapter paginates symbols, keeps provenance and removes unfinis
  }});
  const d=await client.historical({start:'2026-09-25',end:'2026-09-25',stocks:['AAPL','MSFT'],now});
  assert.equal(d.bars.length,2);assert.equal(d.source.feed,'iex');assert.equal(d.synthetic,false);assert.equal(calls.length,3);assert.ok(calls[2].includes('page_token=second'));
+ assert.equal(Date.parse(new URL(calls[1]).searchParams.get('end')),now);
  await assert.rejects(client.historical({start:'2026-09-25',end:'2026-09-25',stocks:['AAPL','MSFT'],now,maxPages:1}),/pagination/);
 });
 test('exchange calendar handles early close and excludes holidays',()=>{
@@ -47,6 +48,32 @@ test('exchange calendar handles early close and excludes holidays',()=>{
 test('fresh quote rejects stale, future and crossed markets',()=>{
  const q=fixture().quotes.AAPL;assert.equal(freshQuote(q,now).ask,100);
  assert.throws(()=>freshQuote(q,now+31000),/stale/);assert.throws(()=>freshQuote(q,now-6000),/stale/);assert.throws(()=>freshQuote({...q,bp:101},now),/Invalid/);
+});
+test('paper cooldown is enforced again at submission and expires after ten minutes',()=>{
+ const s=fixture(),i=idea();s.intents=[{symbol:'AAPL',side:'sell',filled_qty:'1',status:'filled',filled_at:new Date(now-590000).toISOString()}];
+ assert.throws(()=>entryRisk(s,i,config(),now),/cooldown/);
+ s.intents[0].filled_at=new Date(now-600000).toISOString();assert.equal(entryRisk(s,i,config(),now).qty,10);
+ s.history.AAPL=[{...s.history.AAPL[0],high:102,low:100,close:101}];
+ assert.throws(()=>entryRisk(s,{...i,strategy:'breakout'},config(),now),/VWAP exit/);
+});
+test('experimental profile is frozen and cannot select arbitrary broker strategies',()=>{
+ const s=fixture(),plan=makeSession({date:'2026-09-25',capital:2000,profile:'activity'},s,now);
+ assert.deepEqual(plan.strategies,['activity']);assert.equal(plan.settings.dailyLossPct,2);assert.equal(plan.engineVersion,2);
+ assert.throws(()=>makeSession({date:'2026-09-25',capital:2000,profile:'leverage'},s,now),/profile/);
+});
+test('active paper breakout warms up from preceding sessions and ranks stocks by opening activity',async()=>{
+ const early=Date.parse('2026-09-25T13:40:10Z'),s=fixture();
+ s.clock.timestamp=new Date(early).toISOString();s.lastSync=new Date(early).toISOString();s.mode='auto';
+ s.assets.AMZN={...s.assets.AAPL};s.quotes={AAPL:{ap:100.3,bp:100.29,t:new Date(early).toISOString()},AMZN:{ap:100.3,bp:100.29,t:new Date(early).toISOString()}};
+ const p=new PaperService({state:s,now:()=>early,settings:()=>({...config(),maxPositions:1}),strategies:()=>['activity']});p.s=structuredClone(s);p.client=fakeClient(s);
+ const calls=[];
+ p.client.historical=async options=>{calls.push(options);return {bars:options.start==='2026-09-25'?['AAPL','AMZN'].flatMap(symbol=>[
+ {symbol,timestamp:'2026-09-25T13:30:00Z',minute:0,open:100,close:100.1,high:100.2,low:99.9,volume:symbol==='AMZN'?3000:2000},
+ {symbol,timestamp:'2026-09-25T13:35:00Z',minute:5,open:100.1,close:100.3,high:100.4,low:100.1,volume:100000}])
+ :Array.from({length:14},(_,i)=>['AAPL','AMZN'].map(symbol=>({symbol,timestamp:new Date(Date.parse('2026-09-01T13:30:00Z')+i*86400000).toISOString(),volume:1000}))).flat()};};
+ await p.poll();assert.equal(p.client.submissions.length,1);assert.equal(p.client.submissions[0].symbol,'AMZN');
+ assert.equal(p.openingVolumes.AAPL.length,14);assert.equal(calls[1].end,'2026-09-24');
+ await p.poll();assert.equal(p.client.submissions.length,1);assert.equal(calls.length,2);
 });
 test('entry risk checks account, current clock, limits, reservations and closed markets',()=>{
  const s=fixture(),i=idea(),c=config();assert.deepEqual(entryRisk(s,i,c,now),{qty:10,price:100.1});
