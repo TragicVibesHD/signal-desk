@@ -1,5 +1,7 @@
 # Signal Desk
 
+Real five-minute history can now be downloaded without API keys from **Data & connections → Download public stock history**. The current local replay contains 60 sessions for six stocks, uses $2,000, and has a saved real-data comparison. See [REAL_DATA.md](REAL_DATA.md) for coverage, limitations and repeatable setup. Alpaca credentials remain necessary for current-market paper orders and IEX history.
+
 A local U.S. stock **paper-trading research application** with two separate workspaces: credential-free historical replay, and an optional Alpaca paper account using actual market data. No order can reach a real-money trading endpoint. The bundled prices are deterministic synthetic data; actual Alpaca data and paper execution require your own paper API keys. No paid service, external package, or AI key is required by the app.
 
 **[Current bot comparison and standards](BOT_COMPARISON.md)** — engineering audit, broker protection, research assumptions and remaining evidence gaps. The September 30 paper test returned $1.20 on $2,000 before fees. New sessions require local paper credentials. General setup: [Paper account and real data](PAPER_SETUP.md).

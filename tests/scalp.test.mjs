@@ -56,7 +56,7 @@ test('scalp signals need consecutive completed bars and volume-confirmed breakou
 });
 test('research compares scalping with its actual larger-position and shorter-exit profile',()=>{
  const r=evaluate(prepare(demoData()),initial().settings),scalp=r.results.find(x=>x.strategy==='scalp');
- assert.equal(r.version,5);assert.equal(scalp.settings.positionPct,75);assert.equal(scalp.settings.maxHoldMinutes,15);
+ assert.equal(r.version,6);assert.equal(scalp.settings.positionPct,75);assert.equal(scalp.settings.maxHoldMinutes,15);
  assert.equal(scalp.settings.maxEntriesDay,8);assert.ok(scalp.test.entries<=r.testDays*8);
  assert.equal(r.results.find(x=>x.strategy==='baseline').settings.positionPct,25);
  assert.equal(r.evidence.status,'insufficient');

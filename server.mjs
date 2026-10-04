@@ -7,6 +7,7 @@ import {initial,prepare,demoData,tick,account,approve,stop,log,updateSettings,ev
 import {Alpaca} from './alpaca.mjs';
 import {PaperService,paperInitial} from './paper.mjs';
 import {downloadEvaluation} from './research.mjs';
+import {downloadPublicHistory} from './yahoo.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),dir=process.env.DATA_DIR?path.resolve(process.env.DATA_DIR):path.join(root,'data');fs.mkdirSync(dir,{recursive:true});
 // One engine per account directory, even if another process chooses a different port.
 const lockPath=path.join(dir,'engine.lock'),lockToken=randomUUID();
@@ -29,16 +30,19 @@ save();
 const paperPath=path.join(dir,'paper.json'),downloadPath=path.join(dir,'downloaded-market.json');
 function savePaper(value){const fd=fs.openSync(paperPath+'.tmp','w');try{fs.writeFileSync(fd,JSON.stringify(value));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(paperPath+'.tmp',paperPath);}
 const paper=new PaperService({state:fs.existsSync(paperPath)?JSON.parse(fs.readFileSync(paperPath,'utf8')):paperInitial(),save:savePaper,settings:()=>state.settings,strategies:()=>state.strategies});
-let dataJob={status:fs.existsSync(downloadPath)?'ready':'idle'};
+const savedDownload=fs.existsSync(downloadPath)?JSON.parse(fs.readFileSync(downloadPath,'utf8')):null;
+let dataJob=savedDownload?{status:'ready',label:savedDownload.label,bars:savedDownload.bars.length,sessions:new Set(savedDownload.bars.map(b=>b.timestamp.slice(0,10))).size,source:savedDownload.source}:{status:'idle'};
 function checkResearchIdle(){if(paper.busy||paper.s.running||paper.s.positions.some(p=>paper.owned(p.symbol)>0)||paper.s.intents.some(i=>!['filled','canceled','expired','rejected','replaced'].includes(i.status)))throw Error('Stop paper entries and resolve app positions and orders before historical research.');}
 function checkResearchFinished(){if(dataJob.status==='loading'&&dataJob.kind==='research')throw Error('Wait for the real-data comparison to finish before arming paper entries.');}
-function loadDataset(nextDataset){
- if(Object.keys(state.positions).length)throw Error('Close replay positions before replacing data.');
+function loadDataset(nextDataset,{archiveReplay=false,capital=state.startingCash}={}){
+ if(state.running)throw Error('Pause replay before replacing its data.');
+ if(Object.keys(state.positions).length&&!archiveReplay)throw Error('Close replay positions or choose to back up the replay account before replacing data.');
+ capital=Number(capital);if(!Number.isFinite(capital)||capital<100||capital>1000000)throw Error('Replay capital must be between $100 and $1,000,000.');
  const next=prepare(nextDataset);if(next.frames.length<12)throw Error('At least 12 distinct bar times required');
  const backup=path.join(dir,'backups');fs.mkdirSync(backup,{recursive:true});const tag=Date.now();
  fs.writeFileSync(path.join(backup,`replay-${tag}.json`),JSON.stringify({state,dataset}));
  fs.writeFileSync(datasetPath+'.tmp',JSON.stringify(nextDataset));fs.renameSync(datasetPath+'.tmp',datasetPath);
- const settings=state.settings,strategies=state.strategies;dataset=nextDataset;market=next;state=initial();state.settings=settings;state.strategies=strategies;
+ const settings=state.settings,strategies=state.strategies;dataset=nextDataset;market=next;state=initial();Object.assign(state,{cash:capital,startingCash:capital,dayStart:capital,settings,strategies});
  for(let i=0;i<12;i++)tick(state,market);log(state,'Historical dataset loaded. Previous replay account and data backed up locally.');
 }
 const port=Number(process.env.PORT||4317),host='127.0.0.1';
@@ -48,7 +52,7 @@ const server=http.createServer(async(req,res)=>{
  try{
  if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(req.headers.host))return send(403,{error:'Local access only'});
  const url=new URL(req.url,`http://${host}:${port}`);
- if(req.method==='GET'&&url.pathname==='/api/state')return send(200,{...state,history:undefined,account:account(state),watch:Object.values(state.quotes).map(q=>({...q,series:(state.history[q.symbol]||[]).map(b=>b.close)})),data:{label:market.label,synthetic:market.synthetic,source:market.source,total:market.frames.length,sessions:new Set(market.frames.map(f=>f.day)).size},strategyInfo:STRATEGIES,paper:paper.public(),dataJob});
+ if(req.method==='GET'&&url.pathname==='/api/state')return send(200,{...state,history:undefined,account:account(state),watch:Object.values(state.quotes).map(q=>({...q,series:(state.history[q.symbol]||[]).map(b=>b.close)})),data:{label:market.label,synthetic:market.synthetic,source:market.source,bars:market.frames.reduce((n,f)=>n+f.bars.length,0),total:market.frames.length,sessions:new Set(market.frames.map(f=>f.day)).size},strategyInfo:STRATEGIES,paper:paper.public(),dataJob});
  if(req.method==='GET'&&url.pathname==='/api/paper/export')return send(200,paper.public());
  if(req.method==='GET'&&url.pathname==='/api/export')return send(200,{account:account(state),orders:state.orders,trades:state.trades,settings:state.settings,research:state.research||null,dataset:market.label});
  if(req.method==='POST'&&url.pathname.startsWith('/api/')){
@@ -112,13 +116,21 @@ const server=http.createServer(async(req,res)=>{
    dataJob={status:'ready',label:d.label,bars:d.bars.length,sessions:new Set(checked.frames.map(f=>f.day)).size,source:d.source};
   }).catch(e=>{dataJob={status:'error',error:e.message};});break;
  }
- case '/api/data/load':if(dataJob.status==='loading')throw Error('Wait for the download to finish.');if(!fs.existsSync(downloadPath))throw Error('Download historical bars first.');loadDataset(JSON.parse(fs.readFileSync(downloadPath,'utf8')));break;
+ case '/api/data/public':{
+  if(dataJob.status==='loading')throw Error('A historical download is already in progress.');
+  dataJob={status:'loading',kind:'public',startedAt:new Date().toISOString()};
+  downloadPublicHistory().then(d=>{
+   fs.writeFileSync(downloadPath+'.tmp',JSON.stringify(d));fs.renameSync(downloadPath+'.tmp',downloadPath);
+   dataJob={status:'ready',kind:'public',label:d.label,bars:d.bars.length,sessions:d.source.calendar.length,source:d.source};
+  }).catch(e=>{dataJob={status:'error',kind:'public',error:e.message};});break;
+ }
+ case '/api/data/load':if(dataJob.status==='loading')throw Error('Wait for the download to finish.');if(!fs.existsSync(downloadPath))throw Error('Download historical bars first.');loadDataset(JSON.parse(fs.readFileSync(downloadPath,'utf8')),{archiveReplay:b.archiveReplay===true,capital:b.capital??state.startingCash});break;
  case '/api/reset':{const settings=state.settings,strategies=state.strategies;if(b.confirm!=='RESET')throw Error('Type RESET to clear the account');dataset=demoData();market=prepare(dataset);state=initial();state.settings=settings;state.strategies=strategies;if(fs.existsSync(datasetPath))fs.unlinkSync(datasetPath);for(let i=0;i<12;i++)tick(state,market);break;}
  default:return send(404,{error:'Unknown action'});
  }save();return send(200,{ok:true});
  }
  if(req.method!=='GET')return send(405,{error:'Method not allowed'});
- const assets={'/':'index.html','/app.js':'app.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/research-ui.js':'research-ui.js','/standards-ui.js':'standards-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
+ const assets={'/':'index.html','/app.js':'app.js','/data-ui.js':'data-ui.js','/paper-ui.js':'paper-ui.js','/session-ui.js':'session-ui.js','/research-ui.js':'research-ui.js','/standards-ui.js':'standards-ui.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};const name=assets[url.pathname];if(!name)return send(404,{error:'Not found'});
  res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/javascript','Cache-Control':'no-cache'});res.end(fs.readFileSync(path.join(root,'public',name)));
  }catch(e){send(400,{error:e.message});}
 });

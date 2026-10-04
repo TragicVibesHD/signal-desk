@@ -45,7 +45,7 @@ export function dataQuality(data){
  for(const f of data.frames)for(const b of f.bars)if(b.minute%5||Date.parse(b.timestamp)%300000)offGrid++;
  const missingSessions=sessions.filter(s=>!days.includes(s.day)).map(s=>s.day);
  return {symbols,sessions:sessions.length,expectedBars:expected,missingBars:missing,offGrid,missingSessions,coveragePct:expected?round((expected-missing)/expected*100):0,
-  note:'Missing IEX bars may reflect no exchange trades; bars are never invented. Coverage uses five-minute calendar slots. This does not check survivorship, corporate actions or consolidated-market prices.'};
+  note:'Missing bars are never invented. For IEX, gaps may reflect no exchange trades. Coverage uses five-minute provider-calendar slots; the calendar is not independently reconstructed. This does not check survivorship, corporate actions or consolidated-market prices.'};
 }
 
 // A transparent passive comparator, excluded from strategy selection. Holds overnight.

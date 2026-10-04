@@ -4,7 +4,11 @@ Updated October 3, 2026; checked locally with Node 24.14.0.
 
 ## Automated checks
 
-Current version 5 suite: **91 tests pass**. Historical entries below record the checks run for earlier versions.
+Current version 6 research suite: **98 tests pass**. Historical entries below record the checks run for earlier versions.
+
+Real-history follow-up: downloaded and loaded 28,080 Yahoo Finance bars for all six stocks, spanning 60 complete sessions from July 10 through October 2. Coverage was 100%, with no missing slots or off-grid bars. Dates matched the published holiday calendar for this range. Cross-checked Apple's 78 latest-day closes against Twelve Data public demo: all matched within one cent. Saved the $2,000 comparison with 42 development / 18 final sessions. All six final-test P&Ls were negative under both base and stressed costs; the Yahoo/IEX feed mismatch also prevents paper qualification. Source records and raw data stay local. See REAL_DATA.md.
+
+Browser follow-up: verified the public download, explicit replay-backup/load flow, real-source banner, 28,080-bar/60-session summary, $2,000 replay allocation and saved comparison. Updated comparison buttons distinguish loaded market history from authenticated Alpaca IEX downloads. No browser warnings/errors or document overflow were captured at the normal 1280-pixel viewport. The previous synthetic replay backup includes its four simulated positions. The active server remains a VS Code child process; current-market paper credentials are still disconnected.
 
 October 3 audit: ten added regressions cover exact executable-limit sizing, rounded-stop risk, active reservations, liquidity caps, same-bar recovery from temporary quote/spread failures, fixed expiry, decline/uncertain-order deduplication, signal-close drift, entry-boundary revalidation and full-precision profit reconciliation. The research test also verifies that completed-trade realized P&L matches total P&L for flat runs in every strategy and cost scenario.
 

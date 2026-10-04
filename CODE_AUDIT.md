@@ -27,3 +27,5 @@ Borrowed margin and an AI decision layer were not added in this audit. Neither a
 The version 5 suite adds ten regression tests covering whole-share boundary sizing, rounded stop risk, reservations and participation, recovery from missing quotes/wide spreads, fixed freshness deadlines, durable duplicate prevention, signal-close drift, lost entry conditions and subcent cash reconciliation. Provider responses in these tests are fixtures, not authenticated broker orders. The full suite contains 91 tests.
 
 At inspection the local server was running, the saved session was complete and flat, and credentials were disconnected. No new paper session was armed during this audit.
+
+Follow-up on October 3: real Yahoo Finance history has now replaced the synthetic replay after a local backup. The $2,000 real-data comparison is saved; all six final-test results were negative. See [REAL_DATA.md](REAL_DATA.md). The earlier audit's synthetic-data observation describes its original inspection, not the current loaded dataset.

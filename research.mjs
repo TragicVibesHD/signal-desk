@@ -87,7 +87,8 @@ export function evaluate(data, costs=initial().settings, options={}) {
   }
   const quality=dataQuality(data),benchmark=basketBenchmark(data,test,capital,settings);
   const winner=results.find(r=>r.strategy===selected), checks=[
-    {label:'Provider-labelled real data',pass:!data.synthetic&&data.source?.provider==='Alpaca'},
+    {label:'Provider-labelled real data',pass:!data.synthetic&&['Alpaca','Yahoo Finance'].includes(data.source?.provider)},
+    {label:'Data feed matches Alpaca IEX paper strategy and volume assumptions',pass:data.source?.provider==='Alpaca'&&data.source?.feed==='iex'},
     {label:'At least 60 sessions and 15 final test sessions',pass:days.length>=60&&test.length>=15},
     {label:'Five-minute data coverage at least 95%, no off-grid bars or missing sessions',pass:quality.coveragePct>=95&&!quality.offGrid&&!quality.missingSessions.length},
     {label:'At least 20 completed trades in the final test',pass:winner.test.roundTrips>=20},
@@ -97,7 +98,7 @@ export function evaluate(data, costs=initial().settings, options={}) {
     {label:'No remaining positions at train or test boundaries',pass:!winner.train.openPositions&&!winner.test.openPositions&&!winner.stress.openPositions},
     {label:'At least two of three development walk-forward folds profitable',pass:folds.length===3&&folds.filter(f=>f.validation.pnl>0&&!f.validation.openPositions).length>=2}
   ];
-  return {version:5,label:data.label,synthetic:data.synthetic,capital,settings,stressSettings:stress,quality,benchmarks:{cash:{name:'Keep cash',pnl:0,returnPct:0},basket:benchmark},
+  return {version:6,label:data.label,synthetic:data.synthetic,source:data.source,capital,settings,stressSettings:stress,quality,benchmarks:{cash:{name:'Keep cash',pnl:0,returnPct:0},basket:benchmark},
     trainDays:split,testDays:test.length,trainEnd:train.at(-1),testStart:test[0],selected,results,folds,
     evidence:{status:checks.every(c=>c.pass)?'paper_candidate':'insufficient',checks},created:new Date().toISOString(),
     note:'Selection uses development net return only; the final chronological 30% is excluded. Walk-forward folds choose using only preceding sessions. Each account starts independently with the stated budget; volume context uses only prior sessions. Research uses prior completed-bar liquidity and conservative OHLC bracket thresholds: gaps can exceed stops and ambiguous touches charge the stop first. Levels approximate filled-entry prices; broker brackets are based on entry limits. Costs and execution sequences are modeled, not actual quotes; entry-limit fill/cancel behavior is not replayed. Full-precision modeled prices and fees are retained through completed-cycle aggregation; exit-fill counts are exported separately. Residual positions are marked, never fictitiously liquidated. Repeated changes after viewing results contaminate the holdout. Passing checks is a heuristic for further paper observation, not statistical proof or permission for live trading.'};
