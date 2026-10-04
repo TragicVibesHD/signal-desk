@@ -31,7 +31,7 @@ test('HTTP workflow, origin protection, persistence and safe restart',async()=>{
  await post('stop');s=await get();assert.equal(s.halted,true);assert.equal(s.running,false);assert.ok(!s.queue.some(o=>['pending','approved'].includes(o.status)));
  const cash=s.cash,cursor=s.cursor;assert.equal(JSON.parse(await readFile(path.join(dir,'state.json'),'utf8')).cash,cash);await end();await start();s=await get();assert.equal(s.cash,cash);assert.equal(s.cursor,cursor);assert.equal(s.running,false);assert.equal(s.lastDataAt,0);
  assert.equal((await post('flatten')).status,200);s=await get();assert.equal(Object.keys(s.positions).length,0);
- assert.equal((await post('research',{capital:2000})).status,200);s=await get();assert.equal(s.research.results.length,5);assert.equal(s.research.capital,2000);assert.equal(s.research.evidence.status,'insufficient');
+ assert.equal((await post('research',{capital:2000})).status,200);s=await get();assert.equal(s.research.results.length,6);assert.equal(s.research.capital,2000);assert.equal(s.research.evidence.status,'insufficient');
  assert.equal((await post('research/real',{capital:2000})).status,400);assert.equal((await get()).research.runNumber,1);
  assert.equal((await fetch(base+'/api/export')).status,200);
  assert.equal((await post('import',{label:'bad',bars:[]})).status,400);assert.equal((await get()).cursor,s.cursor);

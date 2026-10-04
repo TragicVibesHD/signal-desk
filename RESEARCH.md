@@ -37,3 +37,15 @@ The experiment retains whole shares, no leverage, 25% maximum per stock, four po
 ## Current evidence limitation
 
 The persisted September 30 paper session completed with five buys and five sells, $1.20 P&L on its $2,000 allocation (0.06%) before fees, and no remaining positions. One session is insufficient to distinguish an edge from noise. No downloaded historical dataset or active credentials were available during this upgrade, so no real-data return improvement has been established. All synthetic evaluations are software validation only. Authenticated historical comparison and prospective paper observation remain the next evidence steps.
+
+## Larger-position scalping experiment — October 3
+
+Added **Aggressive scalp · paper experiment** at the user's request. The observed entries in the earlier session were each one whole share, about $250–$350, under a $500 per-stock ceiling. Larger dollar gains require either a larger position or a larger favorable price move; they cannot be created by setting an income target.
+
+This new profile allows one position using up to 75% of allocated cash ($1,500 on $2,000), with no borrowing. Its stop trigger is 0.4%, target is 0.8%, maximum holding time is 15 minutes, symbol cooldown is five minutes, and maximum is eight filled entries per day. Per-entry risk remains capped at 0.5% of allocation ($10), and the session-loss trigger remains 2% ($40). Whole-share rounding, available cash, open orders and a 1% IEX-volume participation cap can reduce the position below $1,500. Spread must be at most 10 basis points; entry limits use an additional two basis points above the ask.
+
+At exactly $1,500 notional, a 0.8% favorable move is $12 and a 0.4% unfavorable move is $6 before execution costs. Those are arithmetic illustrations, not expected earnings or guaranteed maximum losses. Stops remain application-managed; gaps, stale quotes or outages can produce larger losses.
+
+The scalp signal needs eight consecutive five-minute bars, a close above the preceding three-bar high and session VWAP, a rising short trend, and volume at least 1.2× the recent median. It rejects prices more than 0.5% above VWAP. Qualifying stocks compete by their volume ratio. These fixed hypotheses have not been optimized or validated as profitable. Signals use completed five-minute bars, and current-market monitoring polls every ten seconds. This is a short-hold scalp experiment, not high-frequency trading; [Alpaca's own disclosure](https://files.alpaca.markets/disclosures/library/RisksAutoTrading.pdf) says its platform is not designed for high-frequency execution.
+
+The strategy lab now compares six rows, including scalping with its actual 75% sizing, tighter thresholds, holding limit and entry cap. Its modeled spreads and fill assumptions still differ from live quote execution. Run the real-data comparison before drawing conclusions, then select the scalp profile on a new dated paper session. Existing completed or armed sessions are not silently changed.

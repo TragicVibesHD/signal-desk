@@ -1,5 +1,5 @@
 import {randomUUID, createHash} from 'node:crypto';
-import {initial, signal, indicators, stamp} from './engine.mjs';
+import {initial, signal, signalPriority, indicators, stamp} from './engine.mjs';
 import {UNIVERSE} from './alpaca.mjs';
 import {makeSession,exchangeTime,sessionTotals,sessionEntryCheck,riskCapital,unresolved} from './session.mjs';
 
@@ -37,13 +37,15 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   if (s.positions.some(p=>p.symbol===idea.symbol) || open.some(o=>o.symbol===idea.symbol)) throw Error('This stock already has a position or open order.');
   const buys=open.filter(o=>o.side==='buy');
   if (s.positions.length+buys.length>=settings.maxPositions) throw Error('Maximum position count reached.');
-  const {ask}=freshQuote(s.quotes[idea.symbol],now);
+  const {ask,bid}=freshQuote(s.quotes[idea.symbol],now);
+  if(settings.maxSpreadBps&&(ask-bid)/ask*10000>settings.maxSpreadBps)throw Error('Spread is too wide for the scalping profile.');
+  if(settings.maxEntriesDay){const entries=s.intents.slice(s.session?.intentStart??0).filter(i=>i.side==='buy'&&stamp(i.createdAt).day===s.day&&(Number(i.filled_qty)>0||active(i)));if(entries.length>=settings.maxEntriesDay)throw Error('Daily entry count limit reached.');}
   const recentExit=[...s.intents].reverse().find(i=>i.symbol===idea.symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
-  if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<600000)throw Error('Ten-minute cooldown after the last exit.');
+  if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<(settings.cooldownMinutes??10)*60000)throw Error(`${settings.cooldownMinutes??10}-minute cooldown after the last exit.`);
   const vwap=indicators(s.history[idea.symbol]||[]).vwap;
-  if(['breakout','activity'].includes(idea.strategy)&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Breakout entry is already below its VWAP exit threshold.');
+  if(['breakout','activity','scalp'].includes(idea.strategy)&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Breakout entry is already below its VWAP exit threshold.');
   if (Math.abs(ask/idea.reference-1)>.005) throw Error('Price moved more than 0.5% from the suggestion.');
-  const price=Math.ceil(ask*1.001*100)/100;
+  const price=Math.ceil(ask*(1+(settings.entryBufferBps??10)/10000)*100)/100;
   const reserved=buys.reduce((n,o)=>n+Math.max(0,finite(o.qty,'order quantity')-finite(o.filled_qty,'filled quantity'))*finite(o.limit_price,'limit price'),0);
   const exposure=s.positions.reduce((n,p)=>n+Math.abs(finite(p.market_value,'position value')),0);
   const qty=idea.qty,notional=qty*price;
@@ -207,7 +209,7 @@ export class PaperService {
       const held=(now-Date.parse(owner?.filled_at||owner?.createdAt))/60000;
       let price;try{price=freshQuote(s.quotes[position.symbol],now).bid;}catch{};
       const avg=Number(position.avg_entry_price);
-      const reason=s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=60?'60-minute time exit':price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||['breakout','activity'].includes(owner?.strategy)&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null;
+      const reason=s.flatten?'Manual or daily-loss flatten':Date.parse(s.clock.next_close)-now<=10*60000?'Exchange session close':held>=(c.maxHoldMinutes??60)?`${c.maxHoldMinutes??60}-minute time exit`:price&&price<=avg*(1-c.stopPct/100)?'Stop threshold':price&&price>=avg*(1+c.takePct/100)?'Profit threshold':last&&now-Date.parse(last.timestamp)<390000&&(owner?.strategy==='reversion'&&last.close>=v.vwap||['breakout','activity','scalp'].includes(owner?.strategy)&&last.close<v.vwap||owner?.strategy==='momentum'&&v.fast<v.slow)?'Strategy exit':null;
       if(reason){try{await this.submit({symbol:position.symbol,strategy:owner?.strategy},'sell',reason,Math.floor(qty));}catch(e){this.log(`${position.symbol}: ${e.message}`);}}
     }
     if(!s.positions.some(p=>this.owned(p.symbol)>0)&&!s.orders.some(o=>active(o)&&s.intents.some(i=>i.client_order_id===o.client_order_id)))s.flatten=false;
@@ -237,13 +239,15 @@ export class PaperService {
       if(!this.historyFetchedAt||now-this.historyFetchedAt>=30000){await this.refreshHistory();this.historyFetchedAt=now;}
       if(plan)plan.scan={time:new Date(now).toISOString(),results:[]};
       const relative=symbol=>{const values=this.openingVolumes?.[symbol]||[],opening=s.history[symbol]?.find(b=>b.minute===0);return values.length===14&&opening?opening.volume/(values.reduce((n,v)=>n+v,0)/14||Infinity):0;};
-      const stocks=this.strategies().includes('activity')?[...UNIVERSE].sort((a,b)=>relative(b)-relative(a)||a.localeCompare(b)):UNIVERSE;
+      const scalpActivity=symbol=>signalPriority(s.history[symbol]||[],'scalp');
+      const scorer=this.strategies().includes('activity')?relative:this.strategies().includes('scalp')?scalpActivity:null;
+      const stocks=scorer?[...UNIVERSE].sort((a,b)=>scorer(b)-scorer(a)||a.localeCompare(b)):UNIVERSE;
       for(const symbol of stocks){const h=s.history[symbol]||[],last=h.at(-1),scan={symbol,message:'No qualifying signal on the latest completed bar.'};if(plan)plan.scan.results.push(scan);
         if(!last){scan.message='Waiting for completed five-minute IEX bars.';continue;}
         if(s.seen[symbol]===last.timestamp){scan.message='Latest completed bar already evaluated; waiting for a new bar.';continue;}
         s.seen[symbol]=last.timestamp;
         const recentExit=[...s.intents].reverse().find(i=>i.symbol===symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
-        if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<600000){scan.message='Ten-minute cooldown after the last exit.';continue;}
+        if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<(c.cooldownMinutes??10)*60000){scan.message=`${c.cooldownMinutes??10}-minute cooldown after the last exit.`;continue;}
         if(s.positions.some(p=>p.symbol===symbol)||s.suggestions.some(i=>i.symbol===symbol&&pending(i))){scan.message='Position or pending suggestion already exists.';continue;}
         for(const strategy of this.strategies()){
           if(strategy==='activity'&&(this.openingVolumes?.[symbol]?.length||0)<14){scan.message='Active breakout needs opening volume from 14 preceding sessions.';continue;}
@@ -251,6 +255,7 @@ export class PaperService {
           let ask;try{ask=freshQuote(s.quotes[symbol],now).ask;}catch(e){scan.message=e.message;break;}
           const capital=riskCapital(s),eq=capital.equity,t=sessionTotals(s),budget=Math.min(eq*c.positionPct/100,eq*c.riskPct/c.stopPct,capital.cash,t?.available??Infinity,eq*c.grossPct/100-(t?.exposure||0)-(t?.reserved||0));
           const qty=Math.floor(Math.min(budget/(ask*1.003),last.volume*c.participationPct/100));if(qty<1){scan.message='Available budget or IEX volume is too small for one share.';break;}
+          scan.budget=budget;scan.notional=qty*ask;scan.qty=qty;
           const idea={id:randomUUID(),symbol,strategy,reason,qty,reference:ask,barTime:last.timestamp,expiresAt:now+90000,status:'pending'};
           try{entryRisk(s,idea,c,now);}catch(e){scan.message=e.message;break;}s.suggestions.unshift(idea);this.persist();
           if(s.mode==='auto'){await this.submit(idea,'buy',reason);await this.sync();scan.message=`${qty} shares submitted; awaiting broker fills.`;}else scan.message='Suggestion awaits approval.';break;

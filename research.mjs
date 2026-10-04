@@ -1,3 +1,4 @@
+import {PROFILES} from './profiles.mjs';
 import {createHash} from 'node:crypto';
 import {initial, tick, account, STRATEGIES, openingVolume,prepare} from './engine.mjs';
 
@@ -70,9 +71,10 @@ export function evaluate(data, costs=initial().settings, options={}) {
   const stress={...settings,spreadBps:Math.max(10,settings.spreadBps*2),slippageBps:Math.max(10,settings.slippageBps*2),commission:Math.max(.01,settings.commission*2)};
   const recipes=Object.keys(STRATEGIES).map(strategy=>({strategy,enabled:[strategy]}));
   recipes.push({strategy:'baseline',enabled:['breakout','reversion','momentum']});
-  const results=recipes.map(({strategy,enabled})=>({strategy,
-    train:run(data,train,enabled,settings,capital),test:run(data,test,enabled,settings,capital),
-    stress:run(data,test,enabled,stress,capital)}));
+  const recipeSettings=r=>r.strategy==='scalp'?{...settings,...PROFILES.scalp.settings}:settings;
+  const results=recipes.map(r=>({strategy:r.strategy,settings:recipeSettings(r),
+    train:run(data,train,r.enabled,recipeSettings(r),capital),test:run(data,test,r.enabled,recipeSettings(r),capital),
+    stress:run(data,test,r.enabled,{...recipeSettings(r),spreadBps:stress.spreadBps,slippageBps:stress.slippageBps,commission:stress.commission},capital)}));
   const selected=[...results].sort((a,b)=>b.train.returnPct-a.train.returnPct)[0].strategy;
   // Three expanding-window selections within development data. Final test days never participate.
   const folds=[];
@@ -80,10 +82,10 @@ export function evaluate(data, costs=initial().settings, options={}) {
   const width=Math.max(1,Math.ceil((train.length-end)/3));
   while (end<train.length) {
     const fit=train.slice(0,end), validation=train.slice(end,Math.min(train.length,end+width));
-    const scores=recipes.map(r=>({r,score:run(data,fit,r.enabled,settings,capital).returnPct}));
+    const scores=recipes.map(r=>({r,score:run(data,fit,r.enabled,recipeSettings(r),capital).returnPct}));
     const choice=scores.sort((a,b)=>b.score-a.score)[0].r;
     folds.push({trainStart:fit[0],trainEnd:fit.at(-1),testStart:validation[0],testEnd:validation.at(-1),
-      selected:choice.strategy,validation:run(data,validation,choice.enabled,settings,capital)});
+      selected:choice.strategy,validation:run(data,validation,choice.enabled,recipeSettings(choice),capital)});
     end+=width;
   }
   const winner=results.find(r=>r.strategy===selected), checks=[
@@ -95,7 +97,7 @@ export function evaluate(data, costs=initial().settings, options={}) {
     {label:'No remaining positions at train or test boundaries',pass:!winner.train.openPositions&&!winner.test.openPositions&&!winner.stress.openPositions},
     {label:'At least two of three development walk-forward folds profitable',pass:folds.length===3&&folds.filter(f=>f.validation.pnl>0&&!f.validation.openPositions).length>=2}
   ];
-  return {version:2,label:data.label,synthetic:data.synthetic,capital,settings,stressSettings:stress,
+  return {version:3,label:data.label,synthetic:data.synthetic,capital,settings,stressSettings:stress,
     trainDays:split,testDays:test.length,trainEnd:train.at(-1),testStart:test[0],selected,results,folds,
     evidence:{status:checks.every(c=>c.pass)?'paper_candidate':'insufficient',checks},created:new Date().toISOString(),
     note:'Selection uses development net return only; the final chronological 30% is excluded. Walk-forward folds choose using only preceding sessions. Each account starts independently with the stated budget; volume context uses only prior sessions. Costs are modeled, not actual quotes. Exit fill slices count as trades. Residual positions are marked, never fictitiously liquidated. Repeated changes after viewing results contaminate the holdout. Passing checks is a heuristic for further paper observation, not statistical proof or permission for live trading.'};

@@ -25,7 +25,7 @@ test('experimental opening breakout requires 14 past volumes, rising opening ran
 test('research matches a $2k session, reports stress and refuses synthetic promotion',()=>{
  const r=evaluate(prepare(demoData()),initial().settings);
  assert.equal(r.capital,2000);assert.equal(r.settings.positionPct,25);assert.equal(r.settings.dailyLossPct,2);
- assert.equal(r.results.length,5);assert.equal(r.folds.length,3);assert.equal(r.evidence.status,'insufficient');
+ assert.equal(r.results.length,6);assert.equal(r.folds.length,3);assert.equal(r.evidence.status,'insufficient');
  assert.equal(r.evidence.checks[0].pass,false);assert.ok(r.stressSettings.slippageBps>=10);
  assert.ok(r.results.every(x=>x.test.dailyReturns.length===r.testDays));
  assert.throws(()=>evaluate(prepare(demoData()),initial().settings,{capital:0}),/capital/);
@@ -34,7 +34,7 @@ test('real-data research pipeline evaluates a provider download without placing 
  const fixture=demoData(),calls=[];
  const client={historical:async options=>{calls.push(options);return fixture;},submit:()=>{throw Error('Research must never submit an order');}};
  const {dataset,report}=await downloadEvaluation(client,{start:'2025-09-02',end:'2025-10-03',costs:initial().settings,capital:2000});
- assert.equal(dataset,fixture);assert.equal(report.capital,2000);assert.equal(report.results.length,5);
+ assert.equal(dataset,fixture);assert.equal(report.capital,2000);assert.equal(report.results.length,6);
  assert.equal(report.evidence.status,'insufficient');assert.match(report.datasetFingerprint,/^[a-f0-9]{64}$/);
  assert.deepEqual(calls,[{start:'2025-09-02',end:'2025-10-03',adjustment:'split'}]);
  await assert.rejects(downloadEvaluation({historical:async()=>{throw Error('Provider offline');}},{start:'2025-09-02',end:'2025-10-03'}),/Provider offline/);

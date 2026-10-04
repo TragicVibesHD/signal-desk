@@ -4,7 +4,7 @@ Updated October 3, 2026; checked locally with Node 24.14.0.
 
 ## Automated checks
 
-`npm test` runs 56 tests without downloading dependencies:
+`npm test` runs 62 tests without downloading dependencies:
 
 - Next-bar entry timing and spread, slippage, commission, and cash accounting.
 - Round-trip reconciliation of cash, equity, and realized P&L.
@@ -61,3 +61,9 @@ All 56 tests pass. New cases check corrected opening warmup, missing opening bar
 The stored September 30 authenticated paper ledger reconciles to $1.20 profit on a $2,000 allocation, five buy / five sell orders, and no remaining positions. This is one observed paper session, before fees. No real historical dataset was saved, and the prior server had stopped with credentials lost from memory. Profit improvement from version 2 is not established. Tests use fixture data, never the broker account.
 
 The one-click real-data comparison downloads the allowed historical window and evaluates it without changing the saved paper session or replay holdings. Its provider pipeline is tested with fixture data; missing credentials are rejected by the HTTP route. Browser inspection verified the five comparison rows, cost-stress column, walk-forward table, failed synthetic evidence checks, experimental profile selector, preserved completed-session results and next-weekday date suggestion. No real orders were sent during verification.
+
+## Scalping profile — October 3, 2026
+
+All 62 tests pass. Added checks verify $1,400 entries against a $2,000 allocation rather than broker buying power, rejection above $1,500, unreserved cash, one-position limit, wide-spread and low-volume rejection, eight-entry cap, five-minute cooldown, $40 session-loss protection, stop/target/15-minute exit submissions, consecutive-bar signal requirements, volume confirmation, and research using the actual scalp profile. These are fixture and synthetic checks; no authenticated scalp performance is established.
+
+Browser verification shows all six comparison rows with their actual position / stop / target settings, rejects synthetic performance as evidence, and exposes the scalp profile in dated paper setup. The completed September 30 result remains unchanged. No browser warnings or errors or document overflow were observed. The updated server runs under the VS Code debugger; the current broker connection is unconfigured, entries are stopped, and no scalp session has been armed. No broker orders were placed during verification.

@@ -30,6 +30,8 @@ const paperPath=path.join(dir,'paper.json'),downloadPath=path.join(dir,'download
 function savePaper(value){const fd=fs.openSync(paperPath+'.tmp','w');try{fs.writeFileSync(fd,JSON.stringify(value));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(paperPath+'.tmp',paperPath);}
 const paper=new PaperService({state:fs.existsSync(paperPath)?JSON.parse(fs.readFileSync(paperPath,'utf8')):paperInitial(),save:savePaper,settings:()=>state.settings,strategies:()=>state.strategies});
 let dataJob={status:fs.existsSync(downloadPath)?'ready':'idle'};
+function checkResearchIdle(){if(paper.busy||paper.s.running||paper.s.positions.some(p=>paper.owned(p.symbol)>0)||paper.s.intents.some(i=>!['filled','canceled','expired','rejected','replaced'].includes(i.status)))throw Error('Stop paper entries and resolve app positions and orders before historical research.');}
+function checkResearchFinished(){if(dataJob.status==='loading'&&dataJob.kind==='research')throw Error('Wait for the real-data comparison to finish before arming paper entries.');}
 function loadDataset(nextDataset){
  if(Object.keys(state.positions).length)throw Error('Close replay positions before replacing data.');
  const next=prepare(nextDataset);if(next.frames.length<12)throw Error('At least 12 distinct bar times required');
@@ -64,8 +66,9 @@ const server=http.createServer(async(req,res)=>{
  case '/api/settings':updateSettings(state,b);delete state.research;break;
  case '/api/mode':if(!['approval','auto'].includes(b.mode))throw Error('Invalid mode');state.mode=b.mode;for(const o of state.queue)if(['approved','pending'].includes(o.status))o.status='cancelled';log(state,`Mode changed to ${b.mode}; existing suggestions cancelled.`);break;
  case '/api/strategies':if(!Array.isArray(b.strategies)||!b.strategies.length||b.strategies.some(k=>!STRATEGIES[k]))throw Error('Choose at least one strategy');state.strategies=[...new Set(b.strategies)];for(const o of state.queue)if(['approved','pending'].includes(o.status)&&!state.strategies.includes(o.strategy))o.status='cancelled';break;
- case '/api/research':{const report=evaluate(market,state.settings,{capital:b.capital??paper.s.session?.capital??2000});state.researchRuns=(state.researchRuns||0)+1;report.runNumber=state.researchRuns;state.research=report;break;}
+ case '/api/research':{checkResearchIdle();const report=evaluate(market,state.settings,{capital:b.capital??paper.s.session?.capital??2000});state.researchRuns=(state.researchRuns||0)+1;report.runNumber=state.researchRuns;state.research=report;break;}
  case '/api/research/real':{
+  checkResearchIdle();
   if(!paper.client)throw Error('Connect Alpaca paper credentials locally first.');
   if(dataJob.status==='loading')throw Error('A historical download is already in progress.');
   const capital=Number(b.capital??paper.s.session?.capital??2000);
@@ -81,13 +84,14 @@ const server=http.createServer(async(req,res)=>{
  }
  case '/api/import':loadDataset({...b,synthetic:false,source:undefined});break;
  case '/api/paper/connect':{
+  checkResearchFinished();
   const key=b.key||process.env.ALPACA_PAPER_KEY,secret=b.secret||process.env.ALPACA_PAPER_SECRET;
   if(!key||!secret)throw Error('Add your Alpaca paper API key and secret in this form or .env.local.');
   await paper.connect(new Alpaca({key,secret}));break;
  }
  case '/api/paper/sync':await paper.exclusive(()=>paper.sync());break;
- case '/api/paper/session':await paper.configureSession(b);break;
- case '/api/paper/start':await paper.start(b.mode);break;
+ case '/api/paper/session':checkResearchFinished();await paper.configureSession(b);break;
+ case '/api/paper/start':checkResearchFinished();await paper.start(b.mode);break;
  case '/api/paper/stop':await paper.stop();break;
  case '/api/paper/approve':await paper.approve(b.id);break;
  case '/api/paper/decline':paper.decline(b.id);break;
