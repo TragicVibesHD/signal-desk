@@ -16,6 +16,19 @@ export function freshQuote(q, now) {
   if (bid<=0 || ask<bid || (ask-bid)/ask>.005) throw Error('Invalid quote or spread exceeds 0.5%.');
   return {ask,bid};
 }
+const entryLimit=(ask,c)=>Math.ceil(ask*(1+(c.entryBufferBps??10)/10000)*100)/100;
+// Size against the same executable limit and rounded stop that submission validates.
+export function entryCapacity(s,symbol,c,now=Date.now()) {
+  const capital=riskCapital(s),equity=finite(capital.equity,'equity'),price=entryLimit(freshQuote(s.quotes[symbol],now).ask,c);
+  const buys=s.orders.filter(o=>active(o)&&o.side==='buy');
+  const reserved=buys.reduce((n,o)=>n+Math.max(0,finite(o.qty,'order quantity')-finite(o.filled_qty||0,'filled quantity'))*finite(o.limit_price,'limit price'),0);
+  const exposure=s.positions.reduce((n,p)=>n+Math.abs(finite(p.market_value,'position value')),0);
+  const budget=Math.max(0,Math.min(finite(capital.cash,'cash'),finite(s.account.buying_power,'buying power'))-reserved);
+  const available=Math.max(0,Math.min(budget,equity*c.positionPct/100,equity*c.grossPct/100-exposure-reserved));
+  const stopRisk=c.brokerProtection?Math.max(price*c.stopPct/100,price-bracketPrices(price,c).stop):price*c.stopPct/100;
+  const qty=Math.floor(Math.max(0,Math.min(available/price,equity*c.riskPct/100/stopRisk,(s.history[symbol]?.at(-1)?.volume||0)*c.participationPct/100)));
+  return {qty,price,budget:available,notional:qty*price};
+}
 export function entryRisk(s, idea, settings, now=Date.now()) {
   if (!s.connected || s.halted || !s.running) throw Error('Paper entries are stopped.');
   if(Object.keys(s.exitRequests||{}).length)throw Error('A position exit is pending; new entries wait for reconciliation.');
@@ -45,11 +58,16 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   if(settings.maxEntriesDay){const entries=s.intents.slice(s.session?.intentStart??0).filter(i=>i.side==='buy'&&stamp(i.createdAt).day===s.day&&(Number(i.filled_qty)>0||active(i)));if(entries.length>=settings.maxEntriesDay)throw Error('Daily entry count limit reached.');}
   const recentExit=[...s.intents].reverse().find(i=>i.symbol===idea.symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
   if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<(settings.cooldownMinutes??10)*60000)throw Error(`${settings.cooldownMinutes??10}-minute cooldown after the last exit.`);
-  const vwap=indicators(s.history[idea.symbol]||[]).vwap;
+  const history=s.history[idea.symbol]||[],vwap=indicators(history).vwap;
   if(['breakout','activity','scalp'].includes(idea.strategy)&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Breakout entry is already below its VWAP exit threshold.');
   if(idea.strategy==='scalp'&&Number.isFinite(vwap)&&ask>vwap*1.005)throw Error('Scalp quote is more than 0.5% above VWAP; do not chase the move.');
+  if(idea.strategy==='activity'&&Number.isFinite(vwap)&&ask>vwap*1.01)throw Error('Opening breakout quote is more than 1% above VWAP.');
+  if(idea.strategy==='reversion'&&Number.isFinite(vwap)&&ask>=vwap)throw Error('Reversion quote has already reached its VWAP exit threshold.');
+  if(idea.strategy==='momentum'&&Number.isFinite(vwap)&&ask<=vwap)throw Error('Momentum quote is no longer above VWAP.');
+  const trigger=idea.strategy==='breakout'?Math.max(...history.filter(b=>b.minute<30).map(b=>b.high)):idea.strategy==='activity'?history.find(b=>b.minute===0)?.high:idea.strategy==='scalp'?Math.max(...history.slice(-4,-1).map(b=>b.high)):null;
+  if(Number.isFinite(trigger)&&ask<=trigger)throw Error('Quote is no longer above the breakout trigger.');
   if (Math.abs(ask/idea.reference-1)>.005) throw Error('Price moved more than 0.5% from the suggestion.');
-  const price=Math.ceil(ask*(1+(settings.entryBufferBps??10)/10000)*100)/100;
+  const price=entryLimit(ask,settings);
   const reserved=buys.reduce((n,o)=>n+Math.max(0,finite(o.qty,'order quantity')-finite(o.filled_qty,'filled quantity'))*finite(o.limit_price,'limit price'),0);
   const exposure=s.positions.reduce((n,p)=>n+Math.abs(finite(p.market_value,'position value')),0);
   const qty=idea.qty,notional=qty*price;
@@ -60,6 +78,7 @@ export function entryRisk(s, idea, settings, now=Date.now()) {
   if(settings.brokerProtection&&qty*(price-bracketPrices(price,settings).stop)>equity*settings.riskPct/100)throw Error('Rounded broker stop exceeds the per-entry risk budget.');
   const last=s.history[idea.symbol]?.at(-1);
   if (!last || now-Date.parse(last.timestamp)-300000>90000 || Date.parse(last.timestamp)+300000>now) throw Error('Completed five-minute bar is stale or missing.');
+  if(idea.barTime&&idea.barTime!==last.timestamp)throw Error('The suggestion signal bar has changed; wait for a new signal.');
   if (qty>Math.floor(last.volume*settings.participationPct/100)) throw Error('Order exceeds the last completed IEX bar volume limit.');
   return {qty,price};
 }
@@ -282,21 +301,27 @@ export class PaperService {
       for(const symbol of stocks){const h=s.history[symbol]||[],last=h.at(-1),scan={symbol,message:'No qualifying signal on the latest completed bar.'};if(plan)plan.scan.results.push(scan);
         if(!last){scan.message='Waiting for completed five-minute IEX bars.';continue;}
         if(s.seen[symbol]===last.timestamp){scan.message='Latest completed bar already evaluated; waiting for a new bar.';continue;}
-        s.seen[symbol]=last.timestamp;
         const recentExit=[...s.intents].reverse().find(i=>i.symbol===symbol&&i.side==='sell'&&Number(i.filled_qty)>0);
         if(recentExit&&now-Date.parse(recentExit.filled_at||recentExit.createdAt)<(c.cooldownMinutes??10)*60000){scan.message=`${c.cooldownMinutes??10}-minute cooldown after the last exit.`;continue;}
         if(s.positions.some(p=>p.symbol===symbol)||s.suggestions.some(i=>i.symbol===symbol&&pending(i))){scan.message='Position or pending suggestion already exists.';continue;}
+        let qualified=false;
         for(const strategy of this.strategies()){
           if(strategy==='activity'&&(this.openingVolumes?.[symbol]?.length||0)<14){scan.message='Active breakout needs opening volume from 14 preceding sessions.';continue;}
           const reason=signal(h,strategy,{openingVolumes:this.openingVolumes?.[symbol]});if(!reason)continue;
-          let ask;try{ask=freshQuote(s.quotes[symbol],now).ask;}catch(e){scan.message=e.message;break;}
-          const capital=riskCapital(s),eq=capital.equity,t=sessionTotals(s),budget=Math.min(eq*c.positionPct/100,eq*c.riskPct/c.stopPct,capital.cash,t?.available??Infinity,eq*c.grossPct/100-(t?.exposure||0)-(t?.reserved||0));
-          const qty=Math.floor(Math.min(budget/(ask*1.003),last.volume*c.participationPct/100));if(qty<1){scan.message='Available budget or IEX volume is too small for one share.';break;}
-          scan.budget=budget;scan.notional=qty*ask;scan.qty=qty;
-          const idea={id:randomUUID(),symbol,strategy,reason,qty,reference:ask,barTime:last.timestamp,expiresAt:now+90000,status:'pending'};
-          try{entryRisk(s,idea,c,now);}catch(e){scan.message=e.message;break;}s.suggestions.unshift(idea);this.persist();
+          qualified=true;
+          const id=[plan?.id||'rolling',s.accountId,s.day,symbol,last.timestamp,strategy].join(':');
+          if(s.suggestions.some(i=>i.id===id)||s.intents.some(i=>i.signalId===id)){s.seen[symbol]=last.timestamp;scan.message='This signal already has a decision or submission record.';break;}
+          let size;try{size=entryCapacity(s,symbol,c,now);}catch(e){scan.message=e.message;break;}
+          const {qty}=size;if(qty<1){scan.message='Available budget, stop risk or IEX volume is too small for one share.';break;}
+          Object.assign(scan,size);
+          const idea={id,symbol,strategy,reason,qty,reference:last.close,barTime:last.timestamp,expiresAt:Date.parse(last.timestamp)+300000+90000,status:'pending'};
+          try{entryRisk(s,idea,c,now);}catch(e){scan.message=e.message;break;}
+          // Transient preflight failures may recover within this bar's freshness window.
+          // A recorded decision consumes the bar even if declined, cancelled or rejected.
+          s.seen[symbol]=last.timestamp;s.suggestions.unshift(idea);this.persist();
           if(s.mode==='auto'){await this.submit(idea,'buy',reason);await this.sync();scan.message=`${qty} shares submitted; awaiting broker fills.`;}else scan.message='Suggestion awaits approval.';break;
         }
+        if(!qualified)s.seen[symbol]=last.timestamp;
       }
       s.suggestions=s.suggestions.slice(0,300);
     }catch(e){this.s.lastError=e.message;

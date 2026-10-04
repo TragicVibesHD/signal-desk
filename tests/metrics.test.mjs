@@ -22,7 +22,7 @@ test('passive basket uses fixed initial whole-share budgets and costs, never an 
  const data=prepare(demoData()),days=[...new Set(data.frames.map(f=>f.day))].slice(-8),costs=initial().settings;
  const a=basketBenchmark(data,days,2000,costs),b=basketBenchmark(data,days,2000,{...costs,commission:1});
  assert.ok(a.cash>=0);assert.ok(a.pnl>b.pnl);assert.ok(a.curve.length>0);assert.match(a.note,/overnight/);
- const report=evaluate(data);assert.equal(report.version,4);assert.equal(report.benchmarks.cash.pnl,0);assert.equal(report.results.length,6);assert.ok(report.results.every(r=>r.test.roundTrips<=r.test.trades));
+ const report=evaluate(data);assert.equal(report.version,5);assert.equal(report.benchmarks.cash.pnl,0);assert.equal(report.results.length,6);assert.ok(report.results.every(r=>r.test.roundTrips<=r.test.trades));
  assert.equal(report.quality.coveragePct,100);assert.equal(report.evidence.status,'insufficient');
 });
 function positionState(){const s=initial();s.strategies=[];s.mode='auto';s.day='2026-09-25';s.settings={...s.settings,spreadBps:0,slippageBps:0,commission:0,priorBarLiquidity:true,intrabarProtection:true};s.positions.AAPL={qty:10,avg:100,entryFee:0,strategy:'momentum',time:'2026-09-25T14:00:00Z',day:s.day};s.history.AAPL=[{symbol:'AAPL',day:s.day,timestamp:'2026-09-25T14:00:00Z',minute:30,close:100,high:100,low:100,volume:1000}];return s;}

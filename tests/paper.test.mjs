@@ -58,7 +58,7 @@ test('paper cooldown is enforced again at submission and expires after ten minut
 });
 test('experimental profile is frozen and cannot select arbitrary broker strategies',()=>{
  const s=fixture(),plan=makeSession({date:'2026-09-25',capital:2000,profile:'activity'},s,now);
- assert.deepEqual(plan.strategies,['activity']);assert.equal(plan.settings.dailyLossPct,2);assert.equal(plan.engineVersion,4);assert.equal(plan.settings.brokerProtection,true);
+ assert.deepEqual(plan.strategies,['activity']);assert.equal(plan.settings.dailyLossPct,2);assert.equal(plan.engineVersion,5);assert.equal(plan.settings.brokerProtection,true);
  assert.throws(()=>makeSession({date:'2026-09-25',capital:2000,profile:'leverage'},s,now),/profile/);
 });
 test('active paper breakout warms up from preceding sessions and ranks stocks by opening activity',async()=>{
@@ -126,7 +126,7 @@ test('mixed or externally changed holdings block automatic ownership assumptions
 test('current-market polling generates one approval per completed bar and automatic mode submits once',async()=>{
  for(const mode of ['approval','auto']){
   const {p}=service();p.s.mode=mode;
-  p.client.historical=async()=>({bars:Array.from({length:12},(_,i)=>({symbol:'AAPL',timestamp:new Date(now-310000-(11-i)*300000).toISOString(),minute:65+i*5,day:'2026-09-25',open:94+i*.5,high:94.2+i*.5,low:93.8+i*.5,close:94+i*.5,volume:100000}))});
+  p.client.historical=async()=>({bars:Array.from({length:12},(_,i)=>({symbol:'AAPL',timestamp:new Date(now-310000-(11-i)*300000).toISOString(),minute:65+i*5,day:'2026-09-25',open:94.01+i*.5,high:94.21+i*.5,low:93.81+i*.5,close:94.01+i*.5,volume:100000}))});
   await p.poll();assert.equal(p.s.suggestions.length,1);assert.equal(p.client.submissions.length,mode==='auto'?1:0);
   await p.poll();assert.equal(p.s.suggestions.length,1);assert.equal(p.client.submissions.length,mode==='auto'?1:0);
  }
@@ -202,7 +202,7 @@ test('automatic session lifecycle buys, reconciles fills, liquidates, records P&
  const {p}=service();allocated(p.s);p.s.mode='auto';let tick=now;
  p.now=()=>tick;p.client.clock=async()=>({is_open:tick<Date.parse('2026-09-25T20:00:00Z'),timestamp:new Date(tick).toISOString(),next_close:'2026-09-25T20:00:00Z'});
  p.client.quotes=async()=>({quotes:{AAPL:{ap:100,bp:99.99,t:new Date(tick).toISOString()}}});
- p.client.historical=async()=>({bars:Array.from({length:12},(_,i)=>({symbol:'AAPL',timestamp:new Date(now-310000-(11-i)*300000).toISOString(),minute:65+i*5,day:'2026-09-25',open:94+i*.5,high:94.2+i*.5,low:93.8+i*.5,close:94+i*.5,volume:100000}))});
+ p.client.historical=async()=>({bars:Array.from({length:12},(_,i)=>({symbol:'AAPL',timestamp:new Date(now-310000-(11-i)*300000).toISOString(),minute:65+i*5,day:'2026-09-25',open:94.01+i*.5,high:94.21+i*.5,low:93.81+i*.5,close:94.01+i*.5,volume:100000}))});
  await p.poll();assert.equal(p.client.submissions.length,1);const buy={...p.client.submissions[0],id:'b',status:'filled',filled_qty:'4',filled_avg_price:'100',filled_at:new Date(tick).toISOString()};assert.equal(buy.qty,'4');
  p.client.setOrders([buy]);p.client.setPositions([{symbol:'AAPL',qty:'4',market_value:'404',avg_entry_price:'100'}]);
  tick=Date.parse('2026-09-25T19:50:00Z');await p.poll();assert.equal(p.s.running,false);assert.equal(p.s.session.status,'closing');assert.equal(p.client.submissions.length,2);

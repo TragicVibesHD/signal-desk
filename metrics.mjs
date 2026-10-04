@@ -11,7 +11,7 @@ export function completedTrades(orders){
   else if(o.side==='sell'){
    if(qty>lot.qty+1e-6)throw Error('Exit fills exceed owned shares in the performance ledger.');
    lot.qty-=qty;lot.proceeds+=qty*price-fee;
-   if(lot.qty<1e-6){trades.push({symbol:o.symbol,strategy:lot.strategy,qty:lot.entryQty,openedAt:lot.openedAt,closedAt:o.time,pnl:round(lot.proceeds-lot.entryCost)});lots.delete(o.symbol);continue;}
+   if(lot.qty<1e-6){trades.push({symbol:o.symbol,strategy:lot.strategy,qty:lot.entryQty,openedAt:lot.openedAt,closedAt:o.time,pnl:lot.proceeds-lot.entryCost});lots.delete(o.symbol);continue;}
   }
   lots.set(o.symbol,lot);
  }

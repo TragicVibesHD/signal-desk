@@ -28,6 +28,7 @@ test('research matches a $2k session, reports stress and refuses synthetic promo
  assert.equal(r.results.length,6);assert.equal(r.folds.length,3);assert.equal(r.evidence.status,'insufficient');
  assert.equal(r.evidence.checks[0].pass,false);assert.ok(r.stressSettings.slippageBps>=10);
  assert.ok(r.results.every(x=>x.test.dailyReturns.length===r.testDays));
+ for(const x of r.results)for(const stage of ['train','test','stress'])if(!x[stage].openPositions)assert.equal(x[stage].realized,x[stage].pnl);
  assert.throws(()=>evaluate(prepare(demoData()),initial().settings,{capital:0}),/capital/);
 });
 test('real-data research pipeline evaluates a provider download without placing orders',async()=>{

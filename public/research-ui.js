@@ -5,7 +5,7 @@ const pct=n=>`${n>=0?'+':''}${Number(n).toFixed(2)}%`;
 const tone=n=>n>=0?'positive':'negative';
 
 export function researchView(state,chart) {
- const r=state.research?.version===4?state.research:null;
+ const r=state.research?.version===5?state.research:null;
  const name=id=>state.strategyInfo[id]?.name||'Combined baseline';
  return `<p class="section-copy">Compare the three corrected rules, experimental volume-filtered breakout and scalping profiles, and the combined baseline. Each row uses its matching dated-paper profile and your budget. Results do not change an armed session.</p>
  <div class="strategy-grid">${Object.entries(state.strategyInfo).map(([id,s])=>`<section class="panel strategy-card"><div class="strategy-index">${['activity','scalp'].includes(id)?'EXPERIMENTAL':'BASELINE'}</div><h2>${esc(s.name)}</h2><p>${esc(s.description)}</p><label class="check"><input type="checkbox" data-strategy="${id}" ${state.strategies.includes(id)?'checked':''}> Enable in replay</label></section>`).join('')}</div>

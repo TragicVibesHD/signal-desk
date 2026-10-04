@@ -4,7 +4,11 @@ Updated October 3, 2026; checked locally with Node 24.14.0.
 
 ## Automated checks
 
-Current version 4 suite: **81 tests pass**. Historical entries below record the checks run for earlier versions.
+Current version 5 suite: **91 tests pass**. Historical entries below record the checks run for earlier versions.
+
+October 3 audit: ten added regressions cover exact executable-limit sizing, rounded-stop risk, active reservations, liquidity caps, same-bar recovery from temporary quote/spread failures, fixed expiry, decline/uncertain-order deduplication, signal-close drift, entry-boundary revalidation and full-precision profit reconciliation. The research test also verifies that completed-trade realized P&L matches total P&L for flat runs in every strategy and cost scenario.
+
+Refreshed the active VS Code server and verified its process parent is Code.exe. The application generated a version 5 report from the explicitly labeled synthetic dataset, retained the completed flat paper session and $1.20 P&L, and reported no uncertain orders. Browser logs contained no warnings/errors; the normal viewport had no document overflow. Credentials remain disconnected; no authenticated new brackets or real-history performance were verified in this audit.
 
 `npm test` runs 62 tests without downloading dependencies:
 

@@ -88,7 +88,7 @@ export function stop(s){s.halted=true;s.running=false;for(const o of s.queue)if(
 function fillVolume(s,b){const previous=s.history[b.symbol]?.at(-1);return s.settings.priorBarLiquidity?(previous?.day===b.day?previous.volume:0):b.volume;}
 function sell(s,symbol,b,reason,reference=b.open){const p=s.positions[symbol],c=s.settings;const qty=Math.min(p.qty,Math.floor(fillVolume(s,b)*c.participationPct/100));if(qty<1){log(s,`${symbol}: exit deferred; no simulated liquidity.`);return;}
  const price=reference*(1-(c.spreadBps/2+c.slippageBps)/10000),fee=qty*c.commission,pnl=(price-p.avg)*qty-fee-p.entryFee*qty/p.qty;
- s.cash+=qty*price-fee;const order={id:randomUUID(),symbol,side:'sell',qty,price:round(price),fee:round(fee),time:b.timestamp,status:'filled',reason,strategy:p.strategy};s.orders.unshift(order);s.trades.unshift({...order,pnl:round(pnl),entry:p.avg});p.entryFee*=1-qty/p.qty;p.qty-=qty;if(!p.qty){delete s.positions[symbol];(s.cooldowns??={})[symbol]=Date.parse(b.timestamp)+(c.cooldownMinutes??10)*60000;}log(s,`${symbol}: sold ${qty} shares · ${reason}`);
+ s.cash+=qty*price-fee;const order={id:randomUUID(),symbol,side:'sell',qty,price,fee,time:b.timestamp,status:'filled',reason,strategy:p.strategy};s.orders.unshift(order);s.trades.unshift({...order,pnl:round(pnl),entry:p.avg});p.entryFee*=1-qty/p.qty;p.qty-=qty;if(!p.qty){delete s.positions[symbol];(s.cooldowns??={})[symbol]=Date.parse(b.timestamp)+(c.cooldownMinutes??10)*60000;}log(s,`${symbol}: sold ${qty} shares · ${reason}`);
 }
 export function tick(s,data,now=Date.now()){
  const f=data.frames[s.cursor];if(!f){s.running=false;log(s,'Dataset ended. Any remaining positions require more data to exit.');return;}
@@ -103,7 +103,7 @@ export function tick(s,data,now=Date.now()){
  for(const o of [...s.queue].sort((a,b)=>(b.priority||0)-(a.priority||0))){if(!['pending','approved'].includes(o.status))continue;if(now>o.expiresAt||s.cursor>o.expiresCursor){o.status='expired';continue;}if(o.status!=='approved'||o.createdCursor>=s.cursor)continue;
  const b=f.bars.find(b=>b.symbol===o.symbol);let error=buyRisk(s,o,b,now);if(!error&&Math.abs(b.open/o.reference-1)>.005)error='Price moved more than 0.5% from suggestion';
  if(error){o.status='rejected';o.reason=error;log(s,`${o.symbol}: ${error}`);continue;}
- const c=s.settings,price=b.open*(1+(c.spreadBps/2+c.slippageBps)/10000),fee=o.qty*c.commission;s.cash-=o.qty*price+fee;s.positions[o.symbol]={qty:o.qty,avg:price,entryFee:fee,strategy:o.strategy,time:b.timestamp,day:b.day};o.status='filled';s.orders.unshift({...o,side:'buy',price:round(price),fee:round(fee),time:b.timestamp,day:b.day});log(s,`${o.symbol}: bought ${o.qty} shares · ${STRATEGIES[o.strategy].name}`);
+ const c=s.settings,price=b.open*(1+(c.spreadBps/2+c.slippageBps)/10000),fee=o.qty*c.commission;s.cash-=o.qty*price+fee;s.positions[o.symbol]={qty:o.qty,avg:price,entryFee:fee,strategy:o.strategy,time:b.timestamp,day:b.day};o.status='filled';s.orders.unshift({...o,side:'buy',price,fee,time:b.timestamp,day:b.day});log(s,`${o.symbol}: bought ${o.qty} shares · ${STRATEGIES[o.strategy].name}`);
  }
  if(s.settings.intrabarProtection)for(const [symbol,p]of Object.entries(s.positions)){
   const b=f.bars.find(b=>b.symbol===symbol);if(!b)continue;
